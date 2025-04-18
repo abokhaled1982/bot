@@ -23,7 +23,7 @@ class Trader:
         # Status-Log immer zu Beginn
         self.logger.log(f"📍 Status: {status} | 📈 Preis: {price:.2f} € | 💡 RSI: {rsi:.2f}")       
         if not self.in_position:
-            if self.strategy.should_enter(market_data):
+            if True:
                 eur = self.strategy.config.get("amount", 10)
                 if self.account.get_balance("EUR") >= eur:
                     if self.orders.place_market_buy(eur):

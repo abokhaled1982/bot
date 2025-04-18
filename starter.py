@@ -10,7 +10,7 @@ from utils.orders import OrderManager
 from core.StrategyEngine import StrategyEngine
 import argparse
 import time
-from coinbase.rest import RESTClient
+
 
 from binance.spot import Spot
 

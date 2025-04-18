@@ -13,6 +13,11 @@ class AccountManager:
     def get_balance(self, asset):
         try:
             account_info = self.client.account()
+            balances = account_info['balances']
+            # Only show non-zero balances
+            non_zero = [b for b in balances if float(b['free']) > 0 or float(b['locked']) > 0]
+            # Get current prices for estimation
+            all_prices = {p['symbol']: float(p['price']) for p in self.client.get_all_tickers()}
             for balance in account_info["balances"]:
                 if balance["asset"] == asset:
                     return float(balance["free"])
