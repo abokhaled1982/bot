@@ -1,0 +1,10 @@
+{
+   "binance":{
+      "api_key": "E33TIlzCeQM48AL8u1S2jco2pjO6miA217uhRpRIn1OMLVstvQyDNbCMCt1MxaXN",
+      "api_secret": "YsPgCAB6sDLhkkkX6ScT73enEUFTGYoQcbZEpn5h4G73eL6l0HCsjeqo6W5XyWOB"
+   },
+   "telegramm":{
+      "token":"7560567534:AAGTh4ml12m1734FmJKNvt_QcdI_KXBqYaQ",
+            "chat_id":"5580257836"
+   }
+}
