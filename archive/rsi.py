@@ -11,7 +11,7 @@ from utils.log import Logger, Stats
 import pandas as pd
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
-from coinbase.rest import RESTClient
+
 
 from utils.telegram import TelegramNotifier
 

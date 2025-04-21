@@ -60,7 +60,7 @@ def fetch_candles2(client, product_id, granularity="ONE_MINUTE", limit=100):
 def fetch_candles(client, product_id, granularity="ONE_MINUTE", limit=100):
     try:
        # Example settings
-        symbol = "BTCUSDT"
+        symbol = "BTCEUR"
         interval = "1m"  # Options: "1m", "5m", "15m", "1h", "1d", etc.
         limit = 100  # Max: 1000
        

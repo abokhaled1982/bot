@@ -11,19 +11,23 @@ class AccountManager:
         self._last_update = datetime.min
 
     def get_balance(self, asset):
+        """
+        Returns the free balance of a specific asset from Binance account info.
+
+        Parameters:
+        - asset (str): Asset symbol, e.g., "BTC" or "EUR"
+
+        Returns:
+        - float: The free balance of the given asset, or 0.0 if not found or on error.
+        """
         try:
             account_info = self.client.account()
-            balances = account_info['balances']
-            # Only show non-zero balances
-            non_zero = [b for b in balances if float(b['free']) > 0 or float(b['locked']) > 0]
-            # Get current prices for estimation
-            all_prices = {p['symbol']: float(p['price']) for p in self.client.get_all_tickers()}
             for balance in account_info["balances"]:
                 if balance["asset"] == asset:
                     return float(balance["free"])
         except Exception as e:
             print("Fehler beim Abrufen des Kontostands:", e)
-            return 0.0
+        
         return 0.0
 
     def get_balances(self):

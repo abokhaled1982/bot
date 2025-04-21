@@ -37,8 +37,8 @@ if __name__ == "__main__":
 
     # Deine Strategien
     strategies = [
-        StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 0.5, "amount": 4}),
-        StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 1, "amount": 4})
+        StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 0.3, "amount": 19})
+        #StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 1, "amount": 4})
     ]
 
     # Trader mit eigenem Logger & Stats
@@ -67,12 +67,8 @@ if __name__ == "__main__":
 
             for trader in traders:
                 trader.logger.log(trader.summary_line(market_data))
-                trader.update(market_data)
-           
-                    
-
+                trader.update(market_data)          
        
-
         except Exception as e:
             main_logger.log(f"❌ Fehler: {e}")
 

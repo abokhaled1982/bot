@@ -1,7 +1,7 @@
 {
    "binance":{
-      "api_key": "E33TIlzCeQM48AL8u1S2jco2pjO6miA217uhRpRIn1OMLVstvQyDNbCMCt1MxaXN",
-      "api_secret": "YsPgCAB6sDLhkkkX6ScT73enEUFTGYoQcbZEpn5h4G73eL6l0HCsjeqo6W5XyWOB"
+      "api_key": "VpDTEYZ4LwbR9ENqyzobviYexAyoH4mIHh8PkxYodVH4mJozN6dD8rxhSnxgfhRu",
+      "api_secret": "Ps7r1T8flXoQ1yIPok8IWiYAotL4kxfM6jkqrZnMzPzUbXYP0WJdkdhSK4Q9sjSb"
    },
    "telegramm":{
       "token":"7560567534:AAGTh4ml12m1734FmJKNvt_QcdI_KXBqYaQ",
