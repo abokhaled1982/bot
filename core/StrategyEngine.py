@@ -25,3 +25,13 @@ class StrategyEngine:
         price = market_data.get("price")
         delta = self.config.get("ema_delta", 1.0)
         return ema is not None and ((price - ema) / ema * 100) <= delta
+    
+    def _check_bollinger(self, market_data):
+        lower = market_data.get("bollinger_lower")
+        price = market_data.get("close")
+
+        # Optional: Schwelle in Prozent unterhalb der unteren Bandgrenze
+        margin_pct = self.config.get("bollinger_margin", 0.0)
+        if lower is None or price is None:
+            return False
+        return price <= lower * (1 + margin_pct)

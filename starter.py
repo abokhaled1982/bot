@@ -37,7 +37,8 @@ if __name__ == "__main__":
 
     # Deine Strategien
     strategies = [
-        StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 0.3, "amount": 19})
+        StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 0.3, "amount": 19}),
+        StrategyEngine(indicators=["bollinger"], config={"bollinger_margin": -0.005, "pct": 0.3, "amount": 15})
         #StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 1, "amount": 4})
     ]
 
@@ -52,23 +53,12 @@ if __name__ == "__main__":
     while True:
         try:
             telegram.check_for_commands()
-            candles = fetch_candles(client, "BTC-EUR")
-            closes = [c["close"] for c in candles]
-            price = closes[-1]
-            rsi = calculate_rsi(closes, 2)
-            ema = calculate_ema(closes, 20)
-
-            market_data = {
-                "price": price,
-                "rsi": rsi,
-                "ema": ema,
-                "timestamp": time.time()
-            }
+            market_data = fetch_candles(client, symbol="BTCEUR", interval="5m")
 
             for trader in traders:
                 trader.logger.log(trader.summary_line(market_data))
-                trader.update(market_data)          
-       
+                trader.update(market_data)
+
         except Exception as e:
             main_logger.log(f"❌ Fehler: {e}")
 

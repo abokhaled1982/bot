@@ -57,7 +57,63 @@ def fetch_candles2(client, product_id, granularity="ONE_MINUTE", limit=100):
         return None
 
 
-def fetch_candles(client, product_id, granularity="ONE_MINUTE", limit=100):
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import pandas as pd
+from ta.volatility import BollingerBands
+
+
+def calculate_rsi(closes, window):
+    try:
+        return RSIIndicator(pd.Series(closes), window=window).rsi().iloc[-1]
+    except:
+        return None
+
+def calculate_ema(closes, window):
+    try:
+        return EMAIndicator(pd.Series(closes), window=window).ema_indicator().iloc[-1]
+    except:
+        return None
+
+def fetch_candles(client, symbol="BTCEUR", interval="1m", limit=100):
+    try:
+        raw_candles = client.klines(symbol=symbol, interval=interval, limit=limit)
+        closes = [float(c[4]) for c in raw_candles]
+
+        df = pd.DataFrame(closes, columns=["close"])
+        bb = BollingerBands(close=df["close"], window=20, window_dev=2)
+
+        lower = bb.bollinger_lband().iloc[-1]
+        upper = bb.bollinger_hband().iloc[-1]
+        last = raw_candles[-1]
+
+        candle = {
+            "open_time": datetime.fromtimestamp(last[0] / 1000),
+            "open": float(last[1]),
+            "high": float(last[2]),
+            "low": float(last[3]),
+            "close": float(last[4]),  #current price is hier          
+            "volume": float(last[5]),
+            "close_time": datetime.fromtimestamp(last[6] / 1000),
+            "quote_asset_volume": float(last[7]),
+            "trades": int(last[8]),
+            "taker_buy_base_volume": float(last[9]),
+            "taker_buy_quote_volume": float(last[10]),
+            "bollinger_lower": lower,
+            "bollinger_upper": upper,
+            "timestamp": datetime.now(ZoneInfo("Europe/Berlin")).strftime('%d.%m.%Y %H:%M'),
+            "rsi" : calculate_rsi(closes, 2),
+            "ema" : calculate_ema(closes, 20)
+        }
+
+        return candle
+
+    except Exception as e:
+        print(f"Fehler: {e}")
+        return None
+
+
+def fetch_candles_2(client, product_id, granularity="ONE_MINUTE", limit=100):
     try:
        # Example settings
         symbol = "BTCEUR"
@@ -89,14 +145,3 @@ def fetch_candles(client, product_id, granularity="ONE_MINUTE", limit=100):
         print(f"Fehler: {e}")
         return None
 
-def calculate_rsi(closes, window):
-    try:
-        return RSIIndicator(pd.Series(closes), window=window).rsi().iloc[-1]
-    except:
-        return None
-
-def calculate_ema(closes, window):
-    try:
-        return EMAIndicator(pd.Series(closes), window=window).ema_indicator().iloc[-1]
-    except:
-        return None

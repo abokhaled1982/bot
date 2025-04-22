@@ -36,13 +36,13 @@ class BotRunner:
 
                 candles = fetch_candles(self.client, "BTC-EUR")
                 closes = [c["close"] for c in candles]
-                price = closes[-1]
+                close = closes[-1]
                 rsi = calculate_rsi(closes, 2)
                 ema = calculate_ema(closes, 20)
                 eur = self.account.get_balance("EUR")
 
                 market_data = {
-                    "price": price,
+                    "close": close,
                     "rsi": rsi,
                     "ema": ema,
                     "eur_balance": eur,
