@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
     # Deine Strategien
     strategies = [
-        StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 0.3, "amount": 19}),
+        #StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 0.3, "amount": 19}),
         StrategyEngine(indicators=["bollinger"], config={"bollinger_margin": -0.005, "pct": 0.3, "amount": 15})
         #StrategyEngine(indicators=["rsi"], config={"rsi": 10, "pct": 1, "amount": 4})
     ]
