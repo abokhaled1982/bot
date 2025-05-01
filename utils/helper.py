@@ -75,13 +75,13 @@ def calculate_ema(closes, window):
     except:
         return None
 
-def fetch_candles(client, symbol="BTCEUR", interval="1m", limit=100):
+def fetch_candles(client, symbol="BTCEUR", interval="15m", limit=100):
     try:
         raw_candles = client.klines(symbol=symbol, interval=interval, limit=limit)
         closes = [float(c[4]) for c in raw_candles]
 
         df = pd.DataFrame(closes, columns=["close"])
-        bb = BollingerBands(close=df["close"], window=20, window_dev=2)
+        bb = BollingerBands(close=df["close"], window=14, window_dev=2)
 
         lower = bb.bollinger_lband().iloc[-1]
         upper = bb.bollinger_hband().iloc[-1]
@@ -102,8 +102,8 @@ def fetch_candles(client, symbol="BTCEUR", interval="1m", limit=100):
             "bollinger_lower": lower,
             "bollinger_upper": upper,
             "timestamp": datetime.now(ZoneInfo("Europe/Berlin")).strftime('%d.%m.%Y %H:%M'),
-            "rsi" : calculate_rsi(closes, 2),
-            "ema" : calculate_ema(closes, 20)
+            "rsi" : calculate_rsi(closes, 4),
+            "ema" : calculate_ema(closes, 4)
         }
 
         return candle
@@ -113,11 +113,11 @@ def fetch_candles(client, symbol="BTCEUR", interval="1m", limit=100):
         return None
 
 
-def fetch_candles_2(client, product_id, granularity="ONE_MINUTE", limit=100):
+def fetch_candles_2(client, symbol="BTCEUR", granularity="ONE_MINUTE", limit=100):
     try:
        # Example settings
-        symbol = "BTCEUR"
-        interval = "1m"  # Options: "1m", "5m", "15m", "1h", "1d", etc.
+        symbol = symbol
+        interval = granularity  # Options: "1m", "5m", "15m", "1h", "1d", etc.
         limit = 100  # Max: 1000
        
         raw_candles = client.klines(symbol=symbol, interval=interval, limit=limit)

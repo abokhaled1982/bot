@@ -1,22 +1,23 @@
-# utils/log.py
-
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 class Logger:
-    def __init__(self, telegram=None, logfile="scalper.log", prefix=None):
+    def __init__(self, telegram=None, prefix=""):
         self.telegram = telegram
-        self.logfile = logfile
-        self.prefix = prefix or ""
+        self.prefix = prefix
 
-    def log(self, message: str):
+    def log(self, message):
         now = datetime.now(ZoneInfo("Europe/Berlin")).strftime('%d.%m.%Y %H:%M')
-        full = f"[{now}]{message}"
+        full = f"[{now}]"
+
+        # Wenn message mehrzeilig ist → jede Zeile einrücken
+        if "\n" in message:
+            indented = "\n".join("  " + line for line in message.splitlines())
+            full += f"\n{indented}"
+        else:
+            full += f" {message}"
+
         print(full)
-        with open(self.logfile, "a", encoding="utf-8") as f:
-            f.write(full + "\n")
+
         if self.telegram:
-            try:
-                self.telegram.send(full)
-            except Exception:
-                pass
+            self.telegram.send(full)

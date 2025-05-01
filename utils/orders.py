@@ -25,7 +25,7 @@ class OrderManager:
             try:
                 amount = decimal.Decimal(amount_eur).quantize(decimal.Decimal("0"), rounding=decimal.ROUND_DOWN)               
                 order = self.client.new_order(
-                symbol='BTCEUR',
+                symbol=self.symbole,
                 side='BUY',
                 type='MARKET',
                 quoteOrderQty=amount

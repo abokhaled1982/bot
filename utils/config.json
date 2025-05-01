@@ -6,5 +6,21 @@
    "telegramm":{
       "token":"7560567534:AAGTh4ml12m1734FmJKNvt_QcdI_KXBqYaQ",
             "chat_id":"5580257836"
-   }
+   },
+
+   "strategies": [
+     
+      {
+         "coin":"TURBO",
+        "symbol": "TURBOUSDC",
+        "interval": "5m",
+        "indicators": "rsi_bollinger",
+        "rsi": 32,
+        "bollinger_margin": 0.01,
+        "pct": 0.2,
+        "amount": 10,
+        "weight": 0.8
+      }
+    ]
+    
 }

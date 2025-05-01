@@ -16,7 +16,7 @@ class TelegramController:
         try:
             requests.post(
                 f"{self.api_url}/sendMessage",
-                data={"chat_id": self.chat_id, "text": message, "parse_mode": "Markdown"}
+                data={"chat_id": self.chat_id, "text": message}
             )
         except Exception as e:
             print(f"[Telegram] Fehler beim Senden: {e}")
