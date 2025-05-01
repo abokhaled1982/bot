@@ -76,15 +76,14 @@ class StrategyEngine:
         gain = (price - entry_price) / entry_price
         target_reached = gain >= self.target_pct
         price_above_bollinger = upper is not None and price > upper
-        rsi_overbought = rsi_val > 70
+     
 
         # Priorität: Gewinn sichern bei +X %, Bollinger-Ausbruch, oder RSI > 70
         if target_reached:
             return True
         if price_above_bollinger:
             return True
-        if rsi_overbought:
-            return True
+       
 
         # === Verlust-Logik ===
         loss = (entry_price - price) / entry_price
