@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from utils.stats import TraderStats
 
 class Trader:
-    def __init__(self, strategy_engine, account, orders, logger,coin="BTC",symbol="BTCEUR",interval="5m"):
+    def __init__(self, strategy_engine, account, orders, logger,coin="BTC",symbol="BTCEUR",balance="EUR",interval="5m"):
         self.strategy = strategy_engine
         self.account = account
         self.orders = orders
@@ -18,6 +18,7 @@ class Trader:
         self.symbol = symbol  # Neu: Symbol wird gespeichert!,
         self.interval=interval
         self.coin=coin
+        self.balance=balance
 
     def update(self, market_data):
         price = market_data["close"]  
@@ -25,7 +26,7 @@ class Trader:
         if not self.in_position:
             if  self.strategy.should_enter(market_data):
                 eur = self.strategy.config.get("amount", 10)
-                if self.account.get_balance("EUR") >= eur:
+                if self.account.get_balance(self.balance) >= eur:
                     if self.orders.place_market_buy(eur):
                         time.sleep(1)
                         new_btc_balance = self.account.get_balance(self.coin)

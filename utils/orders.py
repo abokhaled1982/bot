@@ -81,7 +81,7 @@ class OrderManager:
                         type='LIMIT',
                         timeInForce='GTC',
                         quantity=str(adjusted_qty),
-                        price=str(adjusted_price-30)
+                        price=str(adjusted_price)
                     )
                     self.logger.log(f"✅ Verkauf erfolgreich (Versuch {attempt}): Order-ID {order['orderId']}")
                     return True

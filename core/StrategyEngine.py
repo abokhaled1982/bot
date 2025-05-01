@@ -20,6 +20,12 @@ class StrategyEngine:
         rsi_val = market_data.get("rsi")
         threshold = 70
         return rsi_val is not None and rsi_val > threshold
+    
+    def should_sell_2(self, market_data):    
+        method = getattr(self, f"_sell_{self.indicators}", None)
+        if method and not method(market_data):
+            return False
+        return True
 
     def _check_rsi(self, market_data):
         rsi_val = market_data.get("rsi")
@@ -52,3 +58,46 @@ class StrategyEngine:
         boll_ok = lower is not None and price is not None and price <= lower * (1 + margin_pct)
 
         return rsi_ok and boll_ok
+
+    
+
+
+    def _sell_rsi_bollinger(self, market_data):
+        rsi_val = market_data.get("rsi")
+        price = market_data.get("close")
+        entry_price = market_data.get("entry_price")  # Muss im Markt-Datensatz vorhanden sein
+        upper = market_data.get("bollinger_upper")
+        lower = market_data.get("bollinger_lower")
+
+        if rsi_val is None or price is None or entry_price is None:
+            return False
+
+        # === Gewinn-Logik ===
+        gain = (price - entry_price) / entry_price
+        target_reached = gain >= self.target_pct
+        price_above_bollinger = upper is not None and price > upper
+        rsi_overbought = rsi_val > 70
+
+        # Priorität: Gewinn sichern bei +X %, Bollinger-Ausbruch, oder RSI > 70
+        if target_reached:
+            return True
+        if price_above_bollinger:
+            return True
+        if rsi_overbought:
+            return True
+
+        # === Verlust-Logik ===
+        loss = (entry_price - price) / entry_price
+        stop_loss_pct = self.config.get("max_loss_pct", 0.05)
+        rsi_oversold_exit = rsi_val < 25
+        price_below_bollinger = lower is not None and price < lower
+
+        if loss >= stop_loss_pct:
+            return True
+        if price_below_bollinger:
+            return True
+        if rsi_oversold_exit:
+            return True
+
+        # Kein Verkaufsgrund gefunden
+        return False

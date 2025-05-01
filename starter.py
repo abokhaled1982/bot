@@ -41,7 +41,8 @@ if __name__ == "__main__":
             logger=logger,
             symbol=strat_cfg["symbol"],
             interval=strat_cfg["interval"],
-            coin=strat_cfg["coin"]
+            coin=strat_cfg["coin"],
+            balance=strat_cfg["balance"],
         )
         traders.append(trader)
         logger.log(f"🚀 Trader für {strat_cfg['symbol']} gestartet")
