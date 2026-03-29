@@ -38,6 +38,8 @@ async def main_loop():
                 symbol = token.get('symbol') or 'UNKNOWN'
                 token_data = await dex.get_token_data(address)
                 if not token_data: continue
+                # Update symbol from reliable token_data if available
+                symbol = token_data.get('symbol', symbol)
                 
                 messages = tg.get_recent_mentions(symbol, address, minutes=30)
                 
@@ -68,8 +70,15 @@ async def main_loop():
                 
                 fusion_result = fusion.calculate_score(claude_result, chain_data, token_data, market_data, unique_channels_5m=0)
                 
-                # Finale Nachricht
-                final_msg = f"🚀 *{symbol} ANALYSIERT*\nStatus: {fusion_result['decision']} (Score: {fusion_result['score']})\nSentiment: {claude_result['sentiment']}"
+                # Finale Nachricht für WhatsApp
+                final_msg = (
+                    f"🚀 *{symbol} ANALYSIERT*\n"
+                    f"Status: {fusion_result['decision']} (Score: {fusion_result['score']})\n"
+                    f"Sentiment: {claude_result.get('sentiment', 'N/A')}\n"
+                    f"Hype: {claude_result.get('hype_score', 0)}\n"
+                    f"Risks: {', '.join(claude_result.get('risk_flags', []))}\n"
+                    f"Signals: {', '.join(claude_result.get('key_signals', []))}"
+                )
                 send_whatsapp_update(final_msg)
                 
                 if fusion_result['decision'] == "BUY":

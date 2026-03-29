@@ -41,57 +41,59 @@ class SignalFusion:
     def calculate_score(self, claude_data: dict, chain_data: dict, dex_data: dict, btc_data: dict, unique_channels_5m: int = 0) -> dict:
         breakdown = {}
         
+        # LOGGING: Detaillierte Scores
+        logger.info(f"--- START SCORING ---")
+        
         # 1. Hype-Score (Social) 20%
         hype = claude_data.get("hype_score", 0)
-        
-        # NEU: Frequency-Boost (+20 Punkte wenn >3 Kanäle in 5 Min)
-        if unique_channels_5m > 3:
-            logger.info(f"Applying Frequency-Boost: +20 Hype Score (>3 distinct channels in 5m)")
-            hype = min(100, hype + 20)
-            breakdown["frequency_boost_applied"] = True
-            
         hype_weighted = (hype / 100) * 20
         breakdown["hype_social"] = hype_weighted
+        logger.info(f"Hype: {hype} -> {hype_weighted}")
         
         # 2. Liquidity Lock 25%
         liq_lock = 100 if chain_data.get("liquidity_locked", False) else 0
         liq_weighted = (liq_lock / 100) * 25
         breakdown["liquidity_lock"] = liq_weighted
+        logger.info(f"LiqLock: {liq_lock} -> {liq_weighted}")
         
         # 3. Volume Spike 20%
         vol_spike = min(dex_data.get("volume_spike", 0) * 20, 100)
         vol_weighted = (vol_spike / 100) * 20
         breakdown["volume_spike"] = vol_weighted
+        logger.info(f"VolSpike: {vol_spike} -> {vol_weighted}")
         
         # 4. Wallet-Konzentration 15%
         top_10_pct = chain_data.get("top_10_holder_percent", 100)
         wallet_conc = max(100 - top_10_pct, 0)
         wallet_weighted = (wallet_conc / 100) * 15
         breakdown["wallet_concentration"] = wallet_weighted
+        logger.info(f"WalletConc: {wallet_conc} -> {wallet_weighted}")
         
         # 5. Dev-Aktivität 10%
         risks = claude_data.get("risk_flags", [])
         dev_act = 70 if "None" in risks or not risks else 30
         dev_weighted = (dev_act / 100) * 10
         breakdown["dev_activity"] = dev_weighted
+        logger.info(f"DevAct: {dev_act} -> {dev_weighted}")
         
         # 6. BTC-Marktlage 10%
         btc_change = btc_data.get("btc_1h_change", 0)
-        if btc_change >= 2.0:
-            btc_score = 90
-        elif btc_change <= -5.0:
-            btc_score = 10
+        if btc_change >= 2.0: btc_score = 90
+        elif btc_change <= -5.0: btc_score = 10
         else:
             normalized = (btc_change + 5) / 7
             btc_score = 10 + (normalized * 80)
         btc_weighted = (btc_score / 100) * 10
         breakdown["btc_market"] = btc_weighted
+        logger.info(f"BTC: {btc_change} -> {btc_score} -> {btc_weighted}")
         
         fusion_score = sum(val for key, val in breakdown.items() if isinstance(val, (int, float)))
+        logger.info(f"DEBUG: Fusion Total Score = {fusion_score}")
         
         decision = "SKIP"
         if fusion_score >= 72: decision = "BUY"
         elif fusion_score >= 45: decision = "HOLD"
+        logger.info(f"DEBUG: Final Decision = {decision}")
             
         if liq_lock == 0:
             decision = "SKIP"
@@ -109,9 +111,12 @@ class SignalFusion:
         if decision == "BUY" and btc_change < -3.0:
             decision = "HOLD"
             breakdown["override_reason"] = "BTC dropping > 3%, downgraded BUY to HOLD"
+        
+        logger.info(f"DEBUG: Post-Override Decision = {decision}")
             
         return {
             "score": round(fusion_score, 2),
             "decision": decision,
             "breakdown": breakdown
         }
+
