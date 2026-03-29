@@ -1,10 +1,17 @@
 import asyncio
+import sys
+import os
+
+# Add src to path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
 from loguru import logger
-from adapters.dexscreener import DexScreenerAdapter
-from adapters.telegram_mirror import TelegramAlphaMirror
-from analysis.claude_client import ClaudeAnalyzer
-from analysis.fusion import SignalFusion
-from execution.executor import TradeExecutor
+# Fix imports after restructuring
+from src.adapters.dexscreener import DexScreenerAdapter
+from src.adapters.telegram_mirror import TelegramAlphaMirror
+from src.analysis.claude_client import ClaudeAnalyzer
+from src.analysis.fusion import SignalFusion
+from src.execution.executor import TradeExecutor
 from notify_whatsapp import send_whatsapp_update
 
 async def main_loop():
@@ -26,12 +33,13 @@ async def main_loop():
             candidates = boosted[:10] 
             
             for token in candidates:
-                address = token["address"]
-                symbol = token.get('symbol', 'UNKNOWN')
+                address = token.get("address")
+                if not address: continue
+                symbol = token.get('symbol') or 'UNKNOWN'
                 token_data = await dex.get_token_data(address)
                 if not token_data: continue
                 
-                messages = await tg.get_recent_mentions(symbol, address, minutes=30)
+                messages = tg.get_recent_mentions(symbol, address, minutes=30)
                 
                 # Health Check / Update Logik
                 msg = (
@@ -52,8 +60,13 @@ async def main_loop():
                 
                 if not fusion.apply_prefilter(token_data, chain_data, market_data, messages): continue
                 
-                claude_result = await analyzer.analyze_token(messages)
-                fusion_result = fusion.calculate_score(claude_result, chain_data, token_data, market_data)
+                # Analyse-Daten vorbereiten (Fallback für fehlende Mentions)
+                if not messages:
+                    claude_result = {"hype_score": 20, "risk_flags": ["No_Telegram_Data"], "sentiment": "Neutral", "key_signals": ["No_recent_Telegram_mentions"]}
+                else:
+                    claude_result = await analyzer.analyze_token(messages)
+                
+                fusion_result = fusion.calculate_score(claude_result, chain_data, token_data, market_data, unique_channels_5m=0)
                 
                 # Finale Nachricht
                 final_msg = f"🚀 *{symbol} ANALYSIERT*\nStatus: {fusion_result['decision']} (Score: {fusion_result['score']})\nSentiment: {claude_result['sentiment']}"

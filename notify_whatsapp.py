@@ -7,11 +7,11 @@ load_dotenv()
 
 def send_whatsapp_update(message: str):
     try:
-        # Hier wird die Nachricht an das OpenClaw Gateway gesendet.
-        # OpenClaw interpretiert Nachrichten an den Chat als Updates.
-        logger.info(f"WhatsApp-Update: {message}")
-        
-        # Tool-Aufruf zur Verteilung an den verbundenen WhatsApp-Account
-        # Wir simulieren dies durch einen Log-Eintrag, den OpenClaw dann als Chat-Event an Waled weiterleitet.
+        # OpenClaw automatisiertes Messaging
+        # Sende Nachricht über das interne Gateway
+        # Wir nutzen die systemweite Session-Kommunikation
+        import subprocess
+        subprocess.run(["openclaw", "message", "discord", "WhatsApp", message], check=False)
+        logger.info(f"WhatsApp-Update gesendet: {message}")
     except Exception as e:
-        logger.error(f"Error sending WhatsApp: {e}")
+        logger.error(f"Fehler beim Senden der WhatsApp: {e}")
