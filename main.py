@@ -9,9 +9,11 @@ from loguru import logger
 # Fix imports after restructuring
 from src.adapters.dexscreener import DexScreenerAdapter
 from src.adapters.telegram_mirror import TelegramAlphaMirror
+from src.adapters.safety import SafetyAdapter
 from src.analysis.claude_client import ClaudeAnalyzer
 from src.analysis.fusion import SignalFusion
 from src.execution.executor import TradeExecutor
+from src.execution.monitor import PositionMonitor
 from notify_whatsapp import send_whatsapp_update
 
 async def main_loop():
@@ -19,11 +21,14 @@ async def main_loop():
     
     dex = DexScreenerAdapter()
     tg = TelegramAlphaMirror()
+    safety = SafetyAdapter()
     analyzer = ClaudeAnalyzer()
     fusion = SignalFusion()
     executor = TradeExecutor()
+    monitor = PositionMonitor()
     
-    asyncio.create_task(tg.start_listening())
+    # asyncio.create_task(tg.start_listening())  # Temporarily disabled due to FloodWait
+    asyncio.create_task(monitor.monitor())
     await asyncio.sleep(2)
     
     while True:
@@ -38,10 +43,11 @@ async def main_loop():
                 symbol = token.get('symbol') or 'UNKNOWN'
                 token_data = await dex.get_token_data(address)
                 if not token_data: continue
-                # Update symbol from reliable token_data if available
                 symbol = token_data.get('symbol', symbol)
                 
-                messages = tg.get_recent_mentions(symbol, address, minutes=30)
+                # Skipping telegram mentions while Telegram is unavailable
+                # messages = tg.get_recent_mentions(symbol, address, minutes=30)
+                messages = [] 
                 
                 # Health Check / Update Logik
                 msg = (
@@ -54,8 +60,13 @@ async def main_loop():
                 )
                 send_whatsapp_update(msg)
                 
-                # Weiter mit Filter/Analyse...
+                # Filter/Analyse...
                 if not token_data.get("info", {}).get("socials"): continue
+                
+                # Rug-Pull Safety Check
+                if not await safety.is_safe(address):
+                    logger.warning(f"Safety check FAILED for {symbol}. Skipping.")
+                    continue
                 
                 chain_data = {"liquidity_locked": True, "top_10_holder_percent": 30}
                 market_data = {"btc_1h_change": 0.5}
@@ -82,7 +93,10 @@ async def main_loop():
                 send_whatsapp_update(final_msg)
                 
                 if fusion_result['decision'] == "BUY":
-                    await executor.execute_trade(symbol, address, fusion_result['score'], "BUY")
+                    res = await executor.execute_trade(symbol, address, fusion_result['score'], "BUY")
+                    if res and res.get("status") == "success":
+                        await monitor.add_position(address, token_data.get("price_usd", 0))
+                        send_whatsapp_update(f"✅ *POSITION OPENED: {symbol}* at ${token_data.get('price_usd', 0)}")
 
             await asyncio.sleep(60)
         except Exception as e:

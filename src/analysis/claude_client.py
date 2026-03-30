@@ -54,6 +54,8 @@ class ClaudeAnalyzer:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"{self.base_url}/chat/completions", headers=self.headers, json=payload) as response:
+                    response_text = await response.text()
+                    logger.info(f"DEBUG: Status {response.status}, Body: {response_text}")
                     if response.status == 200:
                         data = await response.json()
                         raw_content = data['choices'][0]['message']['content']
@@ -65,7 +67,7 @@ class ClaudeAnalyzer:
                             return None
                     return None
         except Exception as e:
-            logger.error(f"Error calling Gemini via OpenClaw: {str(e)}")
+            logger.info(f"Response: {response.status}, Data: {await response.text()}"); logger.error(f"Error calling Gemini via OpenClaw: {str(e)}")
             return None
 
     def _compress_messages(self, messages: list) -> str:
