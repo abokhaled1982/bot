@@ -32,6 +32,10 @@ from google.protobuf.internal import encoder
 from google.protobuf.internal import wire_format
 
 _FieldDescriptor = descriptor.FieldDescriptor
+# TODO: Remove this warning count after 34.0
+# Assign bool to int/enum warnings will print 100 times at most which should
+# be enough for users to notice and do not cause timeout.
+_BoolWarningCount = 100
 
 def TruncateToFourByteFloat(original):
   return struct.unpack('<f', struct.pack('<f', original))[0]
@@ -141,15 +145,20 @@ class IntValueChecker(object):
   """Checker used for integer fields.  Performs type-check and range check."""
 
   def CheckValue(self, proposed_value):
-    if type(proposed_value) == bool:
+    global _BoolWarningCount
+    if type(proposed_value) == bool and _BoolWarningCount > 0:
+      _BoolWarningCount -= 1
       message = (
-          '%.1024r has type %s, but expected one of: (int).'
+          '%.1024r has type %s, but expected one of: %s. This warning '
+          'will turn into error in 7.34.0, please fix it before that.'
           % (
               proposed_value,
               type(proposed_value),
+              (int,),
           )
       )
-      raise TypeError(message)
+      # TODO: Raise errors in 2026 Q1 release
+      warnings.warn(message)
 
     if not hasattr(proposed_value, '__index__') or (
         type(proposed_value).__module__ == 'numpy' and
@@ -177,16 +186,20 @@ class EnumValueChecker(object):
     self._enum_type = enum_type
 
   def CheckValue(self, proposed_value):
-    if type(proposed_value) == bool:
+    global _BoolWarningCount
+    if type(proposed_value) == bool and _BoolWarningCount > 0:
+      _BoolWarningCount -= 1
       message = (
-          '%.1024r has type %s, but expected one of: (int).'
+          '%.1024r has type %s, but expected one of: %s. This warning '
+          'will turn into error in 7.34.0, please fix it before that.'
           % (
               proposed_value,
               type(proposed_value),
+              (int,),
           )
       )
-      raise TypeError(message)
-
+      # TODO: Raise errors in 2026 Q1 release
+      warnings.warn(message)
     if not isinstance(proposed_value, numbers.Integral):
       message = ('%.1024r has type %s, but expected one of: %s' %
                  (proposed_value, type(proposed_value), (int,)))

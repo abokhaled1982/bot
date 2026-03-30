@@ -1,12 +1,25 @@
 import asyncio
 import sys
 import os
+import sqlite3
+from datetime import datetime
+from loguru import logger
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from loguru import logger
-# Fix imports after restructuring
+def log_to_db(msg):
+    level = msg.record["level"].name
+    message = msg.record["message"]
+    conn = sqlite3.connect('memecoin_bot.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO bot_logs (level, message, timestamp) VALUES (?, ?, ?)",
+              (level, message, datetime.now()))
+    conn.commit()
+    conn.close()
+
+logger.add(log_to_db)
+
 from src.adapters.dexscreener import DexScreenerAdapter
 from src.adapters.telegram_mirror import TelegramAlphaMirror
 from src.adapters.safety import SafetyAdapter
@@ -27,76 +40,47 @@ async def main_loop():
     executor = TradeExecutor()
     monitor = PositionMonitor()
     
-    # asyncio.create_task(tg.start_listening())  # Temporarily disabled due to FloodWait
     asyncio.create_task(monitor.monitor())
     await asyncio.sleep(2)
     
     while True:
         try:
-            logger.info("Scanning new opportunities & Boosted List...")
+            logger.info("Scanning new opportunities...")
             boosted = await dex.get_boosted_tokens()
-            candidates = boosted[:10] 
-            
-            for token in candidates:
+            for token in boosted[:10]:
                 address = token.get("address")
                 if not address: continue
                 symbol = token.get('symbol') or 'UNKNOWN'
                 token_data = await dex.get_token_data(address)
                 if not token_data: continue
                 symbol = token_data.get('symbol', symbol)
-                
-                # Skipping telegram mentions while Telegram is unavailable
-                # messages = tg.get_recent_mentions(symbol, address, minutes=30)
                 messages = [] 
                 
-                # Health Check / Update Logik
-                msg = (
-                    f"📊 *Status Update: {symbol}*\n"
-                    f"Hype: {len(messages)} Telegram-Alpha-Mentions in 30m\n"
-                    f"Vol-Spike: {token_data.get('volume_spike', 0):.2f}x\n"
-                    f"Liq: {token_data.get('liquidity_usd', 0):,.0f} USD\n"
-                    f"Model: Gemini Flash Lite\n"
-                    f"Decision: [Scan läuft...]"
-                )
-                send_whatsapp_update(msg)
-                
-                # Filter/Analyse...
                 if not token_data.get("info", {}).get("socials"): continue
                 
                 # Rug-Pull Safety Check
                 if not await safety.is_safe(address):
                     logger.warning(f"Safety check FAILED for {symbol}. Skipping.")
+                    await executor.execute_trade(symbol, address, 0, "HOLD", price=token_data.get("price_usd", 0), rejection_reason="Token failed on-chain safety verification (Risk of scam)", funnel_stage="SAFETY_CHECK")
                     continue
                 
                 chain_data = {"liquidity_locked": True, "top_10_holder_percent": 30}
                 market_data = {"btc_1h_change": 0.5}
                 
-                if not fusion.apply_prefilter(token_data, chain_data, market_data, messages): continue
+                if not fusion.apply_prefilter(token_data, chain_data, market_data, messages):
+                    await executor.execute_trade(symbol, address, 0, "HOLD", price=token_data.get("price_usd", 0), rejection_reason="Token did not pass automated filter requirements", funnel_stage="PRE_FILTER")
+                    continue
                 
-                # Analyse-Daten vorbereiten (Fallback für fehlende Mentions)
-                if not messages:
-                    claude_result = {"hype_score": 20, "risk_flags": ["No_Telegram_Data"], "sentiment": "Neutral", "key_signals": ["No_recent_Telegram_mentions"]}
-                else:
-                    claude_result = await analyzer.analyze_token(messages)
-                
+                claude_result = {"hype_score": 20, "risk_flags": ["No_Telegram_Data"], "sentiment": "Neutral", "key_signals": ["No_recent_Telegram_mentions"]}
                 fusion_result = fusion.calculate_score(claude_result, chain_data, token_data, market_data, unique_channels_5m=0)
                 
-                # Finale Nachricht für WhatsApp
-                final_msg = (
-                    f"🚀 *{symbol} ANALYSIERT*\n"
-                    f"Status: {fusion_result['decision']} (Score: {fusion_result['score']})\n"
-                    f"Sentiment: {claude_result.get('sentiment', 'N/A')}\n"
-                    f"Hype: {claude_result.get('hype_score', 0)}\n"
-                    f"Risks: {', '.join(claude_result.get('risk_flags', []))}\n"
-                    f"Signals: {', '.join(claude_result.get('key_signals', []))}"
-                )
-                send_whatsapp_update(final_msg)
-                
                 if fusion_result['decision'] == "BUY":
-                    res = await executor.execute_trade(symbol, address, fusion_result['score'], "BUY")
+                    res = await executor.execute_trade(symbol, address, fusion_result['score'], "BUY", price=token_data.get("price_usd", 0), ai_reasoning=str(claude_result), funnel_stage="BUY_EXEC")
                     if res and res.get("status") == "success":
                         await monitor.add_position(address, token_data.get("price_usd", 0))
-                        send_whatsapp_update(f"✅ *POSITION OPENED: {symbol}* at ${token_data.get('price_usd', 0)}")
+                        send_whatsapp_update(f"✅ *POSITION OPENED: {symbol}*")
+                else:
+                    await executor.execute_trade(symbol, address, fusion_result['score'], "HOLD", price=token_data.get("price_usd", 0), rejection_reason="Did not meet buy score threshold", ai_reasoning=str(claude_result), funnel_stage="SCORING")
 
             await asyncio.sleep(60)
         except Exception as e:
