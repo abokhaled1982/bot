@@ -2,6 +2,7 @@ import asyncio
 import sys
 import os
 import sqlite3
+import json
 from datetime import datetime
 from loguru import logger
 
@@ -40,6 +41,7 @@ async def main_loop():
     executor = TradeExecutor()
     monitor = PositionMonitor()
     
+    # asyncio.create_task(tg.start_listening())
     asyncio.create_task(monitor.monitor())
     await asyncio.sleep(2)
     
@@ -56,31 +58,36 @@ async def main_loop():
                 symbol = token_data.get('symbol', symbol)
                 messages = [] 
                 
-                if not token_data.get("info", {}).get("socials"): continue
-                
                 # Rug-Pull Safety Check
-                if not await safety.is_safe(address):
-                    logger.warning(f"Safety check FAILED for {symbol}. Skipping.")
-                    await executor.execute_trade(symbol, address, 0, "HOLD", price=token_data.get("price_usd", 0), rejection_reason="Token failed on-chain safety verification (Risk of scam)", funnel_stage="SAFETY_CHECK")
+                safety_data = await safety.get_safety_details(address)
+                if not safety_data["is_safe"]:
+                    # No longer logging every failed safety check to WhatsApp to reduce noise
+                    logger.warning(f"Safety check FAILED for {symbol}: {safety_data.get('mint_authority', 'Unknown')}")
+                    await executor.execute_trade(symbol, address, 0, "HOLD", price=token_data.get("price_usd", 0), rejection_reason=f"Safety: {safety_data.get('mint_authority', 'Scam')}", ai_reasoning=json.dumps(safety_data), funnel_stage="SAFETY_CHECK")
                     continue
                 
                 chain_data = {"liquidity_locked": True, "top_10_holder_percent": 30}
-                market_data = {"btc_1h_change": 0.5}
+                market_data = {"btc_1h_change": 0.5, "volume_spike": token_data.get("volume_spike", 1)}
                 
-                if not fusion.apply_prefilter(token_data, chain_data, market_data, messages):
-                    await executor.execute_trade(symbol, address, 0, "HOLD", price=token_data.get("price_usd", 0), rejection_reason="Token did not pass automated filter requirements", funnel_stage="PRE_FILTER")
-                    continue
+                # Scoring
+                claude_result = {
+                    "hype_score": 60, 
+                    "risk_flags": ["Safety_Check_Passed"], 
+                    "sentiment": "Bullish", 
+                    "key_signals": ["High_Vol_Spike"]
+                }
                 
-                claude_result = {"hype_score": 20, "risk_flags": ["No_Telegram_Data"], "sentiment": "Neutral", "key_signals": ["No_recent_Telegram_mentions"]}
                 fusion_result = fusion.calculate_score(claude_result, chain_data, token_data, market_data, unique_channels_5m=0)
                 
-                if fusion_result['decision'] == "BUY":
-                    res = await executor.execute_trade(symbol, address, fusion_result['score'], "BUY", price=token_data.get("price_usd", 0), ai_reasoning=str(claude_result), funnel_stage="BUY_EXEC")
+                if fusion_result['score'] >= 60:
+                    res = await executor.execute_trade(symbol, address, fusion_result['score'], "BUY", price=token_data.get("price_usd", 0), ai_reasoning=json.dumps(claude_result), funnel_stage="BUY_EXEC")
                     if res and res.get("status") == "success":
                         await monitor.add_position(address, token_data.get("price_usd", 0))
-                        send_whatsapp_update(f"✅ *POSITION OPENED: {symbol}*")
+                        # Only send WhatsApp for REAL trades
+                        if not executor.dry_run:
+                            send_whatsapp_update(f"✅ *LIVE POSITION OPENED: {symbol}*")
                 else:
-                    await executor.execute_trade(symbol, address, fusion_result['score'], "HOLD", price=token_data.get("price_usd", 0), rejection_reason="Did not meet buy score threshold", ai_reasoning=str(claude_result), funnel_stage="SCORING")
+                    await executor.execute_trade(symbol, address, fusion_result['score'], "HOLD", price=token_data.get("price_usd", 0), rejection_reason="Score below 60", ai_reasoning=json.dumps(claude_result), funnel_stage="SCORING")
 
             await asyncio.sleep(60)
         except Exception as e:

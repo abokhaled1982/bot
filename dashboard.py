@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import plotly.express as px
+import requests
 
 st.set_page_config(page_title="ProTrading Control Center", layout="wide")
 
@@ -10,37 +10,61 @@ st.title("🛡️ ProTrading Control Center")
 def get_db_connection():
     return sqlite3.connect('memecoin_bot.db')
 
-def get_data(query):
+def get_data(query, params=()):
     conn = get_db_connection()
-    df = pd.read_sql_query(query, conn)
+    df = pd.read_sql_query(query, conn, params=params)
     conn.close()
     return df
 
-# Layout - Funnel Overview
-st.subheader("Decision Funnel (Why Tokens are Rejected)")
-df_all = get_data("SELECT funnel_stage, COUNT(*) as count FROM trades GROUP BY funnel_stage")
-fig = px.funnel(df_all, x='count', y='funnel_stage', title="Funnel: Scanning to Execution")
-st.plotly_chart(fig, use_container_width=True)
+# Professional DataGrid-like UI
+st.subheader("📋 Trade Intelligence Ledger")
+# Get unique tokens by taking the latest status of each address
+query = """
+SELECT token_address, symbol, decision, rejection_reason, ai_reasoning, funnel_stage, MAX(timestamp) as last_seen
+FROM trades 
+GROUP BY token_address 
+ORDER BY last_seen DESC
+"""
+df = get_data(query)
 
-# Main UI
-col1, col2 = st.columns([2, 1])
+# Interactive Filtering
+st.sidebar.header("Filter & Analysis")
+search = st.sidebar.text_input("🔍 Search Symbol or Address")
+if search:
+    df = df[df['symbol'].str.contains(search, case=False, na=False) | 
+            df['token_address'].str.contains(search, case=False, na=False)]
 
+# Professional Table View
+st.data_editor(
+    df,
+    column_config={
+        "token_address": st.column_config.TextColumn("Address", width="medium"),
+        "symbol": st.column_config.TextColumn("Symbol", width="small"),
+        "decision": st.column_config.TextColumn("Decision", width="small"),
+        "ai_reasoning": st.column_config.TextColumn("Intelligence Summary", width="large"),
+    },
+    hide_index=True,
+    use_container_width=True
+)
+
+st.divider()
+
+# Controls
+col1, col2 = st.columns(2)
 with col1:
-    st.subheader("📋 Trade History & Intelligence")
-    trades = get_data("SELECT symbol, decision, rejection_reason, ai_reasoning, funnel_stage, timestamp FROM trades ORDER BY timestamp DESC LIMIT 50")
-    st.dataframe(trades, use_container_width=True)
+    st.subheader("🎯 Manual Override")
+    target_addr = st.text_input("Token Address")
+    target_sym = st.text_input("Symbol")
+    if st.button("Trigger Analysis"):
+        resp = requests.post("http://localhost:8000/api/trade/manual", json={"token_address": target_addr, "symbol": target_sym})
+        st.success("Triggered!")
 
 with col2:
-    st.subheader("⚙️ Control Panel")
-    if st.button("Emergency Stop"):
+    st.subheader("⚠️ System Controls")
+    if st.button("🛑 EMERGENCY STOP"):
         with open("STOP_BOT", "w") as f: f.write("STOP")
         st.error("Stop signal sent!")
-    
-    st.subheader("💡 Risk Settings")
-    max_pos = st.slider("Max Position Size ($)", 0.0, 5.0, 0.20, 0.05)
-    if st.button("Update Risk"):
-        st.success(f"Updated Max Position to ${max_pos}")
 
-st.subheader("📜 Live Event Log")
-logs = get_data("SELECT level, message, timestamp FROM bot_logs ORDER BY timestamp DESC LIMIT 20")
+st.subheader("📜 System Logs")
+logs = get_data("SELECT level, message, timestamp FROM bot_logs ORDER BY timestamp DESC LIMIT 10")
 st.table(logs)

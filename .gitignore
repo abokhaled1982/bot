@@ -1,7 +1,19 @@
+# Python Virtual Environment
 venv/
-.sessions/
-*.session
+.venv/
+env/
+.env
+
+# Database and Session files
 *.db
+*.session
+*.db-journal
+
+# Python Cache
 __pycache__/
 *.pyc
-.env
+
+# Logs
+*.log
+STOP_BOT
+MANUAL_TRADE
