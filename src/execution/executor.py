@@ -139,6 +139,7 @@ class TradeExecutor:
     def __init__(self):
         self.dry_run          = os.getenv("DRY_RUN", "True").lower() == "true"
         self.max_position_usd = float(os.getenv("TRADE_MAX_POSITION_USD", "0.20"))
+        self.min_position_usd = float(os.getenv("TRADE_MIN_POSITION_USD", "0.10"))
         self.db_path          = "memecoin_bot.db"
         self.http             = _build_session()
 
@@ -182,6 +183,20 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"[DB] Fehler: {e}")
 
+    def _calculate_position_size(self, confidence: str) -> float:
+        """Dynamic position sizing based on conviction level."""
+        if   confidence == "HIGH":   return self.max_position_usd
+        elif confidence == "MEDIUM": return (self.max_position_usd + self.min_position_usd) / 2
+        else:                        return self.min_position_usd
+
+    def _calculate_slippage_bps(self, liquidity_usd: float) -> int:
+        """Dynamic slippage based on token liquidity."""
+        if   liquidity_usd >= 500_000: return 100   # 1% — deep liquidity
+        elif liquidity_usd >= 100_000: return 200   # 2%
+        elif liquidity_usd >= 50_000:  return 300   # 3%
+        elif liquidity_usd >= 20_000:  return 500   # 5%
+        else:                          return 800   # 8% — thin liquidity
+
     # ── Haupt-Funktion ──────────────────────────────────────────────────────────
     async def execute_trade(
         self,
@@ -193,9 +208,12 @@ class TradeExecutor:
         rejection_reason: str   = None,
         ai_reasoning:     str   = None,
         funnel_stage:     str   = "FINAL",
+        confidence:       str   = "LOW",
+        liquidity_usd:    float = 0.0,
     ) -> dict:
 
-        position_size = self.max_position_usd
+        position_size = self._calculate_position_size(confidence)
+        slippage_bps  = self._calculate_slippage_bps(liquidity_usd)
 
         # ── Kein Trade ─────────────────────────────────────────────────────────
         if decision not in ["BUY", "SELL"]:
@@ -234,13 +252,14 @@ class TradeExecutor:
                 amount_lamports = int((position_size / sol_price) * 1_000_000_000)
                 logger.info(f"[LIVE] ${position_size} = {amount_lamports} lamports @ SOL ${sol_price:.2f}")
 
+                logger.info(f"[LIVE] Slippage: {slippage_bps}bps ({slippage_bps/100:.1f}%) für Liq ${liquidity_usd:,.0f}")
                 q = self.http.get(
                     JUPITER_QUOTE_URL,
                     params={
                         "inputMint":   SOL_MINT,
                         "outputMint":  token_address,
                         "amount":      amount_lamports,
-                        "slippageBps": 100,
+                        "slippageBps": slippage_bps,
                     },
                     timeout=JUPITER_TIMEOUT,
                 )
