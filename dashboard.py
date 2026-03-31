@@ -16,7 +16,7 @@ WALLET_ADDRESS    = os.getenv("SOLANA_WALLET_ADDRESS", "4jCowukxH9AR8Qxa3WseRiWc
 SOLANA_RPC        = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def get_live_price(address: str) -> float:
     try:
         r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{address}", timeout=5)
@@ -28,7 +28,7 @@ def get_live_price(address: str) -> float:
         pass
     return 0.0
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def get_token_info(address: str) -> dict:
     try:
         r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{address}", timeout=5)
@@ -49,7 +49,7 @@ def get_token_info(address: str) -> dict:
         pass
     return {}
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=60)
 def get_sol_price() -> float:
     try:
         r = requests.get(
@@ -60,33 +60,30 @@ def get_sol_price() -> float:
     except Exception:
         return 0.0
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=60)
 def get_wallet_sol_balance(wallet: str) -> float:
+    from src.utils.rpc import rpc_call
     try:
-        r = requests.post(SOLANA_RPC, json={
-            "jsonrpc": "2.0", "id": 1,
-            "method": "getBalance",
-            "params": [wallet]
-        }, timeout=8)
-        return r.json()["result"]["value"] / 1e9
+        result = rpc_call("getBalance", [wallet])
+        if result is not None:
+            return result["value"] / 1e9
     except Exception:
-        return 0.0
+        pass
+    return 0.0
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def get_wallet_tokens(wallet: str) -> list:
+    from src.utils.rpc import rpc_call
     try:
-        r = requests.post(SOLANA_RPC, json={
-            "jsonrpc": "2.0", "id": 1,
-            "method": "getTokenAccountsByOwner",
-            "params": [
-                wallet,
-                {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"},
-                {"encoding": "jsonParsed"}
-            ]
-        }, timeout=10)
-        accounts = r.json().get("result", {}).get("value", [])
+        result = rpc_call("getTokenAccountsByOwner", [
+            wallet,
+            {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"},
+            {"encoding": "jsonParsed"}
+        ])
+        if not result:
+            return []
         tokens = []
-        for acc in accounts:
+        for acc in result.get("value", []):
             info   = acc["account"]["data"]["parsed"]["info"]
             mint   = info["mint"]
             amount = float(info["tokenAmount"]["uiAmount"] or 0)
@@ -98,16 +95,13 @@ def get_wallet_tokens(wallet: str) -> list:
 
 @st.cache_data(ttl=60)
 def get_wallet_transactions(wallet: str, limit: int = 20) -> list:
+    from src.utils.rpc import rpc_call
     try:
-        # Signaturen holen
-        r = requests.post(SOLANA_RPC, json={
-            "jsonrpc": "2.0", "id": 1,
-            "method": "getSignaturesForAddress",
-            "params": [wallet, {"limit": limit}]
-        }, timeout=10)
-        sigs = r.json().get("result", [])
-        txs  = []
-        for sig in sigs:
+        result = rpc_call("getSignaturesForAddress", [wallet, {"limit": limit}])
+        if not result:
+            return []
+        txs = []
+        for sig in result:
             txs.append({
                 "signature": sig.get("signature", ""),
                 "time":      datetime.fromtimestamp(sig["blockTime"]).strftime("%d.%m.%Y %H:%M") if sig.get("blockTime") else "—",
