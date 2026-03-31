@@ -1,47 +1,13 @@
 {
-  "37J5HbWFPCe1j5WJM9sWmtcCbPX2BrnU5Sy5BGCppump": {
-    "symbol": "Tortellini",
-    "entry_price": 1.362e-05,
-    "timestamp": 52952.12468492
-  },
-  "9TnYLdcxxrswDykHMTQHB8o4nJ6Y8nrAtcMd52Srpump": {
-    "symbol": "MAT",
-    "entry_price": 1.636e-06,
-    "timestamp": 52952.54290474
-  },
-  "AGpkDYi9E4Me2VNHzZxu5Ytj5kv2DG7Dy1ARX78bd6Ah": {
-    "symbol": "TAPE",
-    "entry_price": 3.196e-06,
-    "timestamp": 52952.907942198
-  },
-  "ArpNDKQszhUtuEfbvuTvPVvSVvqgL1vKVH7oXRrBpump": {
-    "symbol": "TRUMPTHUG",
-    "entry_price": 0.0008506,
-    "timestamp": 52953.318972071
-  },
-  "9mpjmeeKP72enJCXiKbbxrBKjXpCKRCNnYaBccFgpump": {
-    "symbol": "CATLAXY",
-    "entry_price": 8.566e-06,
-    "timestamp": 52954.438076507
-  },
-  "77vU6GJYhxSTRoctv8azRMhELHaAneeUcRuN9WsNpump": {
-    "symbol": "TITAN",
-    "entry_price": 1.424e-05,
-    "timestamp": 52954.819529549
-  },
-  "EQbN2hQppkPtNh521qsqaBYPL9hrPDrjZCjLQYSkpump": {
-    "symbol": "Goose",
-    "entry_price": 1.145e-05,
-    "timestamp": 52955.601483752
-  },
-  "222hKu3EV9uEtdTcMumQMKpgT53ehKkm24CH7hZGpump": {
-    "symbol": "FIX",
-    "entry_price": 2.896e-05,
-    "timestamp": 53077.581867505
-  },
-  "8iMp8qWhHpXH7uYTm2iYo6CEfxpCtxonQAiJ6CZQpump": {
-    "symbol": "MOSQUITO",
-    "entry_price": 1.551e-05,
-    "timestamp": 53077.947204584
+  "9oSffRHv2y3reTkCfgzuM93ugLqC5ZaTY57xyKEfpump": {
+    "symbol": "NoKings",
+    "entry_price": 0.0004572,
+    "timestamp": 1774942799.774408,
+    "remaining_pct": 1.0,
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": 0.0005391,
+    "position_size": 1.0
   }
 }
