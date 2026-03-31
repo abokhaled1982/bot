@@ -2,14 +2,12 @@ import os
 import base58
 import base64
 import sqlite3
+import aiohttp
 from datetime import datetime
 from loguru import logger
 from dotenv import load_dotenv
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
-from solana.rpc.async_api import AsyncClient
-from solana.rpc.types import TxOpts
-from solana.rpc.commitment import Confirmed
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -21,6 +19,7 @@ JUPITER_SWAP_URL  = "https://lite-api.jup.ag/swap/v1/swap"
 JUPITER_TIMEOUT   = int(os.getenv("JUPITER_TIMEOUT", "10"))
 JUPITER_RETRIES   = int(os.getenv("JUPITER_RETRIES", "3"))
 SOL_MINT          = "So11111111111111111111111111111111111111112"
+SOLANA_RPC_URL    = os.getenv("SOLANA_RPC_URL", "https://solana-rpc.publicnode.com")
 
 
 def _check_jupiter_reachable() -> bool:
@@ -48,7 +47,6 @@ def _build_session() -> requests.Session:
 
 
 def _get_sol_price(http: requests.Session) -> float:
-    """SOL Preis von CoinGecko holen."""
     try:
         r = http.get(
             "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
@@ -57,7 +55,6 @@ def _get_sol_price(http: requests.Session) -> float:
         return float(r.json()["solana"]["usd"])
     except Exception:
         pass
-    # Fallback: DexScreener
     try:
         r = http.get(
             f"https://api.dexscreener.com/latest/dex/tokens/{SOL_MINT}",
@@ -71,12 +68,77 @@ def _get_sol_price(http: requests.Session) -> float:
     return 150.0
 
 
+async def _send_transaction_http(signed_tx_bytes: bytes) -> str:
+    """
+    Sendet eine signierte Transaktion DIREKT via HTTP RPC.
+    Kein solana-py — vermeidet den Rust Panic Bug komplett.
+    """
+    tx_b64 = base64.b64encode(signed_tx_bytes).decode("utf-8")
+
+    rpc_endpoints = [
+        SOLANA_RPC_URL,
+        "https://solana-rpc.publicnode.com",
+        "https://rpc.ankr.com/solana",
+        "https://api.mainnet-beta.solana.com",
+    ]
+    # Deduplizieren
+    seen = set()
+    rpc_endpoints = [x for x in rpc_endpoints if not (x in seen or seen.add(x))]
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id":      1,
+        "method":  "sendTransaction",
+        "params":  [
+            tx_b64,
+            {
+                "encoding":            "base64",
+                "skipPreflight":       True,
+                "preflightCommitment": "confirmed",
+                "maxRetries":          3,
+            }
+        ]
+    }
+
+    async with aiohttp.ClientSession() as session:
+        for endpoint in rpc_endpoints:
+            try:
+                async with session.post(
+                    endpoint,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    data = await resp.json()
+
+                    if "error" in data:
+                        code = data["error"].get("code", 0)
+                        msg  = data["error"].get("message", "")
+                        # 429 → nächsten Endpunkt versuchen
+                        if code == 429:
+                            logger.warning(f"[TX] 429 auf {endpoint} → nächster...")
+                            continue
+                        # Andere Fehler
+                        logger.error(f"[TX] RPC Fehler: {msg}")
+                        raise Exception(f"RPC Fehler: {msg}")
+
+                    tx_id = data.get("result")
+                    if not tx_id:
+                        logger.error(f"[TX] Kein TX-ID in Antwort: {data}")
+                        raise Exception("Kein TX-ID")
+
+                    return tx_id
+
+            except aiohttp.ClientError as e:
+                logger.warning(f"[TX] Verbindungsfehler auf {endpoint}: {e}")
+                continue
+
+    raise Exception("Alle RPC Endpunkte fehlgeschlagen")
+
+
 class TradeExecutor:
     def __init__(self):
         self.dry_run          = os.getenv("DRY_RUN", "True").lower() == "true"
         self.max_position_usd = float(os.getenv("TRADE_MAX_POSITION_USD", "0.20"))
-        self.rpc_url          = os.getenv("SOLANA_RPC_URL", "https://solana-rpc.publicnode.com")
-        self.client           = AsyncClient(self.rpc_url)
         self.db_path          = "memecoin_bot.db"
         self.http             = _build_session()
 
@@ -172,24 +234,16 @@ class TradeExecutor:
                 amount_lamports = int((position_size / sol_price) * 1_000_000_000)
                 logger.info(f"[LIVE] ${position_size} = {amount_lamports} lamports @ SOL ${sol_price:.2f}")
 
-                try:
-                    q = self.http.get(
-                        JUPITER_QUOTE_URL,
-                        params={
-                            "inputMint":   SOL_MINT,
-                            "outputMint":  token_address,
-                            "amount":      amount_lamports,
-                            "slippageBps": 100,  # 1% slippage
-                        },
-                        timeout=JUPITER_TIMEOUT,
-                    )
-                except (requests.exceptions.ConnectionError,
-                        requests.exceptions.Timeout) as e:
-                    msg = f"Jupiter Quote Fehler: {type(e).__name__}"
-                    logger.error(f"[{token_symbol}] {msg}")
-                    self._log_to_db(token_symbol, token_address, price, 0,
-                                    score, "ERROR", msg, ai_reasoning, funnel_stage)
-                    return {"status": "error", "message": msg}
+                q = self.http.get(
+                    JUPITER_QUOTE_URL,
+                    params={
+                        "inputMint":   SOL_MINT,
+                        "outputMint":  token_address,
+                        "amount":      amount_lamports,
+                        "slippageBps": 100,
+                    },
+                    timeout=JUPITER_TIMEOUT,
+                )
 
                 if q.status_code != 200:
                     msg = f"Quote HTTP {q.status_code}: {q.text[:100]}"
@@ -198,33 +252,26 @@ class TradeExecutor:
 
                 quote_data = q.json()
                 logger.info(
-                    f"[LIVE] Quote OK: {quote_data['inAmount']} lamports "
+                    f"[LIVE] ✅ Quote: {quote_data['inAmount']} lamports "
                     f"→ {quote_data['outAmount']} {token_symbol}"
                 )
 
             else:
-                # SELL — Token zurück zu SOL
-                logger.info(f"[LIVE] SELL {token_symbol}")
                 quote_data = None
 
             # ── 2. SWAP TRANSAKTION BAUEN ──────────────────────────────────────
             if quote_data:
-                try:
-                    tx_r = self.http.post(
-                        JUPITER_SWAP_URL,
-                        json={
-                            "quoteResponse":             quote_data,
-                            "userPublicKey":             str(self.keypair.pubkey()),
-                            "wrapAndUnwrapSol":          True,
-                            "dynamicComputeUnitLimit":   True,
-                            "prioritizationFeeLamports": "auto",
-                        },
-                        timeout=JUPITER_TIMEOUT,
-                    )
-                except requests.exceptions.RequestException as e:
-                    msg = f"Swap Build Fehler: {e}"
-                    logger.error(msg)
-                    return {"status": "error", "message": msg}
+                tx_r = self.http.post(
+                    JUPITER_SWAP_URL,
+                    json={
+                        "quoteResponse":             quote_data,
+                        "userPublicKey":             str(self.keypair.pubkey()),
+                        "wrapAndUnwrapSol":          True,
+                        "dynamicComputeUnitLimit":   True,
+                        "prioritizationFeeLamports": "auto",
+                    },
+                    timeout=JUPITER_TIMEOUT,
+                )
 
                 if tx_r.status_code != 200:
                     msg = f"Swap HTTP {tx_r.status_code}: {tx_r.text[:100]}"
@@ -233,35 +280,27 @@ class TradeExecutor:
 
                 swap_data = tx_r.json()
                 if "swapTransaction" not in swap_data:
-                    msg = f"Kein swapTransaction in Antwort: {list(swap_data.keys())}"
+                    msg = f"Kein swapTransaction: {list(swap_data.keys())}"
                     logger.error(msg)
                     return {"status": "error", "message": msg}
 
-                # ── 3. SIGNIEREN & SENDEN ──────────────────────────────────────
-                logger.info(f"[LIVE] Signiere Transaktion für {token_symbol}...")
-
+                # ── 3. SIGNIEREN ───────────────────────────────────────────────
+                logger.info(f"[LIVE] Signiere TX für {token_symbol}...")
                 raw_tx    = base64.b64decode(swap_data["swapTransaction"])
                 tx        = VersionedTransaction.from_bytes(raw_tx)
                 signed_tx = VersionedTransaction(tx.message, [self.keypair])
 
-                # WICHTIG: send_raw_transaction verwenden (nicht send_transaction)
-                opts   = TxOpts(
-                    skip_preflight=True,          # kein Preflight — vermeidet Fehler
-                    preflight_commitment=Confirmed,
-                    max_retries=3,
-                )
-                result = await self.client.send_raw_transaction(
-                    bytes(signed_tx),
-                    opts=opts,
-                )
-                tx_id  = str(result.value)
-                logger.info(f"[LIVE] ✅ Transaktion gesendet!")
+                # ── 4. DIREKT VIA HTTP SENDEN (kein solana-py!) ────────────────
+                logger.info(f"[LIVE] Sende TX via HTTP RPC...")
+                tx_id = await _send_transaction_http(bytes(signed_tx))
+
+                logger.info(f"[LIVE] ✅ ERFOLGREICH!")
                 logger.info(f"[LIVE] 🔗 https://solscan.io/tx/{tx_id}")
 
             else:
                 tx_id = "SELL_PLACEHOLDER"
 
-            # ── 4. DB LOGGING ──────────────────────────────────────────────────
+            # ── 5. DB LOGGING ──────────────────────────────────────────────────
             self._log_to_db(
                 token_symbol, token_address, price, position_size,
                 score, trade_label, rejection_reason, ai_reasoning, funnel_stage,
