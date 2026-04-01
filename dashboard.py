@@ -39,77 +39,107 @@ WALLET_ADDRESS    = os.getenv(
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-    /* Base */
-    .stApp { background-color: #0d1117; }
-    section[data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
-    .stTabs [data-baseweb="tab-list"] { gap: 4px; }
+    /* ── Base: solid dark backgrounds ────────────────────────────────────── */
+    .stApp { background-color: #1a1d23; color: #d1d5db; }
+    section[data-testid="stSidebar"] { background-color: #14161b; border-right: 1px solid #2a2d35; }
+
+    /* ── Tabs ────────────────────────────────────────────────────────────── */
+    .stTabs [data-baseweb="tab-list"] { gap: 0; border-bottom: 1px solid #2a2d35; }
     .stTabs [data-baseweb="tab"] {
-        background-color: #161b22; border-radius: 8px 8px 0 0;
-        padding: 8px 20px; color: #8b949e; border: 1px solid #30363d;
+        background: none; border-radius: 0; border: none;
+        padding: 10px 22px; color: #6b7280; font-weight: 500; font-size: 0.88rem;
     }
+    .stTabs [data-baseweb="tab"]:hover { color: #d1d5db; }
     .stTabs [aria-selected="true"] {
-        background-color: #1c2333 !important; color: #58a6ff !important;
-        border-bottom: 2px solid #58a6ff;
+        background: none !important; color: #60a5fa !important;
+        border-bottom: 2px solid #60a5fa !important;
     }
 
-    /* KPI cards */
+    /* ── KPI cards ───────────────────────────────────────────────────────── */
     .kpi-card {
-        background: linear-gradient(135deg, #161b22 0%, #1c2333 100%);
-        border: 1px solid #30363d; border-radius: 12px;
-        padding: 16px 20px; text-align: center;
+        background: #22252b; border: 1px solid #2a2d35; border-radius: 10px;
+        padding: 16px 18px; text-align: center;
     }
-    .kpi-card .label { color: #8b949e; font-size: 0.78rem; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .kpi-card .value { color: #e6edf3; font-size: 1.5rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
-    .kpi-card .sub   { color: #8b949e; font-size: 0.75rem; margin-top: 2px; }
+    .kpi-card .label { color: #9ca3af; font-size: 0.72rem; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.8px; }
+    .kpi-card .value { color: #f3f4f6; font-size: 1.4rem; font-weight: 700; }
+    .kpi-card .sub   { color: #6b7280; font-size: 0.72rem; margin-top: 3px; }
 
-    /* Position cards */
+    /* ── Position cards ──────────────────────────────────────────────────── */
     .pos-card {
-        background: #161b22; border: 1px solid #30363d; border-radius: 10px;
-        padding: 16px; margin-bottom: 8px; transition: border-color 0.2s;
+        background: #22252b; border: 1px solid #2a2d35; border-radius: 10px;
+        padding: 16px; margin-bottom: 8px;
     }
-    .pos-card:hover { border-color: #58a6ff; }
+    .pos-card:hover { border-color: #3b82f6; }
     .pos-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-    .pos-symbol { font-size: 1.2rem; font-weight: 700; color: #e6edf3; }
-    .pos-badge  { padding: 2px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; }
-    .badge-profit { background: #0d3222; color: #3fb950; }
-    .badge-loss   { background: #3d1418; color: #f85149; }
-    .badge-neutral{ background: #2a2000; color: #d29922; }
+    .pos-symbol { font-size: 1.15rem; font-weight: 700; color: #f3f4f6; }
+    .pos-badge  { padding: 3px 10px; border-radius: 5px; font-size: 0.72rem; font-weight: 600; }
+    .badge-profit { background: #052e16; color: #4ade80; }
+    .badge-loss   { background: #450a0a; color: #f87171; }
+    .badge-neutral{ background: #422006; color: #fbbf24; }
     .pos-grid   { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-    .pos-item   { }
-    .pos-item .lbl { color: #8b949e; font-size: 0.7rem; text-transform: uppercase; }
-    .pos-item .val { color: #e6edf3; font-size: 0.9rem; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+    .pos-item .lbl { color: #6b7280; font-size: 0.7rem; text-transform: uppercase; }
+    .pos-item .val { color: #e5e7eb; font-size: 0.9rem; font-weight: 600; }
 
-    /* P/L colors */
-    .profit { color: #3fb950 !important; }
-    .loss   { color: #f85149 !important; }
+    /* ── P/L colors ──────────────────────────────────────────────────────── */
+    .profit { color: #4ade80 !important; }
+    .loss   { color: #f87171 !important; }
 
-    /* Log entries */
-    .log-error   { color: #f85149; }
-    .log-warning { color: #d29922; }
-    .log-success { color: #3fb950; }
-    .log-info    { color: #8b949e; }
+    /* ── Log entries ─────────────────────────────────────────────────────── */
+    .log-error   { color: #f87171; }
+    .log-warning { color: #fbbf24; }
+    .log-success { color: #4ade80; }
+    .log-info    { color: #9ca3af; }
 
-    /* Section headers */
+    /* ── Section headers ─────────────────────────────────────────────────── */
     .section-header {
-        color: #e6edf3; font-size: 1.1rem; font-weight: 600;
-        padding-bottom: 8px; border-bottom: 1px solid #30363d;
-        margin-bottom: 16px;
+        color: #f3f4f6; font-size: 1.05rem; font-weight: 600;
+        padding-bottom: 8px; border-bottom: 1px solid #2a2d35;
+        margin-bottom: 14px;
     }
 
-    /* Status indicator */
+    /* ── Status indicator ────────────────────────────────────────────────── */
     .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
-    .status-running { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
-    .status-stopped { background: #f85149; box-shadow: 0 0 6px #f85149; }
+    .status-running { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+    .status-stopped { background: #f87171; box-shadow: 0 0 6px #f87171; }
 
-    /* Hide default streamlit stuff */
+    /* ── History card ────────────────────────────────────────────────────── */
+    .hist-card {
+        background: #22252b; border: 1px solid #2a2d35;
+        border-radius: 8px; padding: 12px 16px; margin-bottom: 6px;
+    }
+    .hist-card:hover { border-color: #3b82f6; }
+
+    /* ── Gate pills ──────────────────────────────────────────────────────── */
+    .gate-pass { background: #052e16; color: #4ade80; padding: 2px 6px; border-radius: 3px; font-size: 0.68rem; margin-right: 2px; font-weight: 600; display: inline-block; }
+    .gate-fail { background: #1f2028; color: #4b5563; padding: 2px 6px; border-radius: 3px; font-size: 0.68rem; margin-right: 2px; font-weight: 500; display: inline-block; }
+
+    /* ── Insight box ─────────────────────────────────────────────────────── */
+    .insight-box {
+        background: #1e2736; border: 1px solid #2a3a52; border-left: 3px solid #3b82f6;
+        border-radius: 6px; padding: 12px 16px; margin-top: 8px;
+    }
+    .insight-box .title { color: #60a5fa; font-size: 0.75rem; font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .insight-box .text  { color: #d1d5db; font-size: 0.82rem; line-height: 1.6; }
+
+    /* ── Info badge ──────────────────────────────────────────────────────── */
+    .info-badge {
+        display: inline-block; background: #1f2028; color: #9ca3af;
+        padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; margin-right: 4px;
+    }
+
+    /* ── Hide default streamlit ──────────────────────────────────────────── */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {display: none;}
-    div[data-testid="stMetric"] { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; }
-    div[data-testid="stMetricValue"] { font-family: 'JetBrains Mono', monospace; }
+    div[data-testid="stMetric"] {
+        background: #22252b; border: 1px solid #2a2d35; border-radius: 8px; padding: 10px;
+    }
+    div[data-testid="stMetricValue"] { color: #f3f4f6; }
+    div[data-testid="stMetricLabel"] { color: #9ca3af; }
 
-    /* Expander styling */
-    .streamlit-expanderHeader { background-color: #161b22 !important; border: 1px solid #30363d !important; border-radius: 8px !important; }
+    .streamlit-expanderHeader {
+        background: #22252b !important; border: 1px solid #2a2d35 !important; border-radius: 8px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -309,6 +339,97 @@ def kpi_card(label: str, value: str, sub: str = "") -> str:
         <div class="value">{value}</div>
         <div class="sub">{sub}</div>
     </div>"""
+
+
+def _generate_strategy_insight(dec, stage, n_passed, ai, rej, age_h):
+    """Generate a strategy insight based on why the token was accepted/rejected."""
+    hints = []
+    md = ai.get("market_data", {}) if ai else {}
+    cd = ai.get("chain_data", {}) if ai else {}
+    flags = ai.get("risk_flags", []) if ai else []
+    is_mig = ai.get("is_migration", False) if ai else False
+
+    if "BUY" in dec:
+        hints.append("Dieser Token hat alle 6 Gates bestanden und wurde gekauft.")
+        if ai.get("hype_score", 0) >= 80:
+            hints.append("Sehr hoher Hype-Score — starkes Momentum zum Kaufzeitpunkt.")
+        if is_mig:
+            hints.append("Migration-Token: Pump.fun Bonus +15 hat beim Scoring geholfen.")
+        if md.get("liquidity_usd", 0) < 15000:
+            hints.append("Achtung: Niedrige Liquiditaet erhoet das Slippage-Risiko.")
+
+    elif stage == "DATA_CHECK":
+        hints.append("Token hatte keine DexScreener-Daten. Entweder zu neu oder nicht gelistet.")
+        if is_mig:
+            hints.append("Migration-Tokens brauchen oft 1-3 Min bis DexScreener sie indexiert. Die Watchlist sollte das abfangen.")
+
+    elif stage == "SAFETY_CHECK":
+        hints.append("RugCheck hat diesen Token als unsicher eingestuft.")
+        hints.append("Moegliche Gruende: Mint Authority nicht revoked, Freeze Authority aktiv, bekannter Scam.")
+        hints.append("Strategie-Tipp: Safety ist ein Hard-Filter — daran sollte man nichts aendern.")
+
+    elif stage == "PRE_FILTER":
+        if "Liq zu niedrig" in rej or "Migration Liq" in rej:
+            hints.append("Liquiditaet war unter dem Minimum. Niedrige Liq = hohes Rug-Pull Risiko.")
+            hints.append("Wenn du mehr Risiko eingehen willst, koenntest du das Liq-Minimum senken — aber Vorsicht.")
+        elif "fällt" in rej or "dumpt" in rej:
+            hints.append("Token war zum Scan-Zeitpunkt im Abwaertstrend. Der Bot kauft nicht in fallende Messer.")
+            hints.append("Strategie: Richtig so. Erst auf Trendumkehr warten.")
+        elif "Spike zu niedrig" in rej:
+            hints.append("Kein ausreichender Volume-Spike. Ohne Volumen-Explosion kein frühes Kaufsignal.")
+        elif "Verkaufsdruck" in rej or "Kaufdruck" in rej:
+            hints.append("Mehr Sells als Buys — der Markt verkauft diesen Token aktiv.")
+            hints.append("Strategie: Buy-Ratio ist ein wichtiger Indikator fuer Momentum.")
+        elif "zu neu" in rej.lower():
+            hints.append("Token war < 1h alt. Sehr neue Tokens haben ein hohes Rug-Risiko.")
+            hints.append("Migration-Tokens umgehen diesen Filter — sie sind neu by design.")
+        elif "Critical Flag" in rej:
+            flag_name = rej.split("Critical Flag: ")[-1].split("|")[0].strip() if "Critical Flag:" in rej else ""
+            hints.append(f"Risk Flag '{flag_name}' hat den Token geblockt.")
+            if "Heavy_Selling" in rej:
+                hints.append("Mehr als doppelt so viele Sells wie Buys — klares Dump-Signal.")
+            if "Wash_Trading" in rej:
+                hints.append("Hohe Volume bei sehr wenigen Transaktionen = kuenstliches Volumen.")
+            if "Liquidity_Drain" in rej:
+                hints.append("Preis crasht und Volumen >> Liquiditaet — jemand zieht Liquiditaet ab.")
+        else:
+            hints.append(f"PreFilter hat geblockt: {rej[:80]}")
+
+    elif stage == "SCORING":
+        if "Override" in rej:
+            override_part = rej.split("Override: ")[1].split("|")[0].strip() if "Override:" in rej else ""
+            hints.append(f"Score war evtl. hoch genug, aber Override hat eingehriffen: {override_part}")
+            hints.append("Overrides schuetzen vor Kaeufen trotz guten Scores bei kritischen Bedingungen.")
+        else:
+            hints.append(f"Fusion Score hat nicht gereicht (min 65 fuer BUY).")
+            # Identify weakest signal
+            if "Breakdown:" in rej:
+                hints.append("Schau dir die Breakdown-Werte an — der niedrigste Wert ist dein Schwachpunkt.")
+            if md.get("change_1h", 0) < 5:
+                hints.append("Schwaches 1h-Momentum reduziert den Hype-Score stark.")
+            if cd.get("top_10_pct", 0) > 50:
+                hints.append("Hohe Wallet-Konzentration (Top 10) drueckt den Score runter.")
+
+    elif "STOP_LOSS" in stage:
+        hints.append("Position wurde per Stop-Loss geschlossen. Verlust begrenzt.")
+        hints.append("Frage dich: War der Einstiegszeitpunkt richtig? Haetten die Daten beim Kauf schon Warnsignale gezeigt?")
+
+    elif "TP" in stage:
+        hints.append("Take-Profit erreicht — Gewinne realisiert!")
+        if "TP3" in stage:
+            hints.append("+200% ist ein exzellenter Trade. Die Strategie hat hier perfekt funktioniert.")
+        elif "TP1" in stage:
+            hints.append("50% der Position bei +50% verkauft. Restposition laeuft mit Trailing Stop weiter.")
+
+    elif "TRAILING" in stage:
+        hints.append("Trailing Stop hat ausgeloest. Der Token ist vom Hoechststand zurueckgefallen.")
+        hints.append("Das ist gewollt: Gewinne sichern, bevor sie verschwinden.")
+
+    elif "TIME_EXIT" in stage:
+        hints.append("Position nach 24h ohne ausreichend Gewinn geschlossen.")
+        hints.append("Stale Positionen binden Kapital. Time-Exit raeumt sie auf.")
+
+    return " ".join(hints) if hints else ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -807,27 +928,85 @@ with tab_wallet:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — TRADING HISTORY
+# TAB 5 — TRADING HISTORY (Professional)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_history:
-    st.markdown('<div class="section-header">Trading History</div>', unsafe_allow_html=True)
 
-    # Filters
-    fc1, fc2, fc3, fc4 = st.columns([2, 1, 1, 1])
-    with fc1:
-        search = st.text_input("Search symbol", placeholder="e.g. NoKings...", key="hist_search")
-    with fc2:
-        decision_filter = st.selectbox("Type", ["All", "BUY", "SELL", "HOLD", "SKIP"], key="hist_dec")
-    with fc3:
-        stage_filter = st.selectbox("Stage", ["All", "BUY_EXEC", "SAFETY_CHECK", "PRE_FILTER", "SCORING", "STOP_LOSS", "TP1", "TP2", "TP3", "TRAILING_STOP", "TIME_EXIT"], key="hist_stage")
-    with fc4:
-        limit = st.selectbox("Max rows", [25, 50, 100, 200], index=1, key="hist_limit")
+    # ── Auto-refresh toggle ──────────────────────────────────────────────────
+    hist_top_l, hist_top_r = st.columns([4, 1])
+    with hist_top_l:
+        st.markdown('<div class="section-header">Trading History</div>', unsafe_allow_html=True)
+    with hist_top_r:
+        auto_refresh = st.toggle("Auto-Refresh (30s)", value=False, key="hist_auto")
 
+    if auto_refresh:
+        import streamlit.components.v1 as components
+        components.html(
+            '<script>setTimeout(function(){window.parent.location.reload()},30000)</script>',
+            height=0,
+        )
+
+    # ── Quick Stats Row ──────────────────────────────────────────────────────
+    df_hist_stats = db_query("""
+        SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN decision LIKE '%BUY%' THEN 1 ELSE 0 END) as buys,
+            SUM(CASE WHEN decision LIKE '%SELL%' THEN 1 ELSE 0 END) as sells,
+            SUM(CASE WHEN decision = 'REJECT' THEN 1 ELSE 0 END) as rejects,
+            SUM(CASE WHEN funnel_stage = 'SAFETY_CHECK' THEN 1 ELSE 0 END) as g2_fail,
+            SUM(CASE WHEN funnel_stage = 'PRE_FILTER' THEN 1 ELSE 0 END) as g4_fail,
+            SUM(CASE WHEN funnel_stage = 'SCORING' THEN 1 ELSE 0 END) as g5_fail,
+            SUM(CASE WHEN funnel_stage = 'BUY_EXEC' THEN 1 ELSE 0 END) as bought
+        FROM trades
+    """)
+    if not df_hist_stats.empty:
+        s = df_hist_stats.iloc[0]
+        hs1, hs2, hs3, hs4, hs5, hs6 = st.columns(6)
+        hs1.markdown(kpi_card("Scanned", str(int(s.get("total", 0))), ""), unsafe_allow_html=True)
+        hs2.markdown(kpi_card("Bought", f'<span class="profit">{int(s.get("bought", 0))}</span>', "Passed all gates"), unsafe_allow_html=True)
+        hs3.markdown(kpi_card("Sold", str(int(s.get("sells", 0))), ""), unsafe_allow_html=True)
+        hs4.markdown(kpi_card("Safety Fail", str(int(s.get("g2_fail", 0))), "Gate 2"), unsafe_allow_html=True)
+        hs5.markdown(kpi_card("PreFilter Fail", str(int(s.get("g4_fail", 0))), "Gate 4"), unsafe_allow_html=True)
+        hs6.markdown(kpi_card("Score Fail", str(int(s.get("g5_fail", 0))), "Gate 5"), unsafe_allow_html=True)
+
+    st.markdown("")
+
+    # ── Filters ──────────────────────────────────────────────────────────────
+    with st.container():
+        fc1, fc2, fc3, fc4, fc5 = st.columns([2, 1.2, 1.2, 1.2, 0.8])
+        with fc1:
+            search = st.text_input(
+                "Search", placeholder="Symbol or address...",
+                key="hist_search", label_visibility="collapsed",
+            )
+        with fc2:
+            decision_filter = st.selectbox(
+                "Decision", ["All", "BUY", "SELL", "REJECT", "SKIP"],
+                key="hist_dec",
+            )
+        with fc3:
+            stage_filter = st.selectbox(
+                "Failed at Gate",
+                ["All", "DATA_CHECK", "SAFETY_CHECK", "PRE_FILTER", "SCORING",
+                 "BUY_EXEC", "EXEC_LIMIT",
+                 "STOP_LOSS", "TP1", "TP2", "TP3", "TRAILING_STOP", "TIME_EXIT"],
+                key="hist_stage",
+            )
+        with fc4:
+            gate_filter = st.selectbox(
+                "Min Gates Passed",
+                ["Any", "1+ (Data)", "2+ (Safety)", "3+ (Risk)", "4+ (PreFilter)", "5+ (Scoring)", "6 (Bought)"],
+                key="hist_gate",
+            )
+        with fc5:
+            limit = st.selectbox("Rows", [25, 50, 100, 250, 500], index=1, key="hist_limit")
+
+    # Build query
     where_clauses = []
     params = []
     if search:
-        where_clauses.append("symbol LIKE ?")
-        params.append(f"%{search}%")
+        where_clauses.append("(symbol LIKE ? OR token_address LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
     if decision_filter != "All":
         where_clauses.append("decision LIKE ?")
         params.append(f"%{decision_filter}%")
@@ -835,13 +1014,30 @@ with tab_history:
         where_clauses.append("funnel_stage = ?")
         params.append(stage_filter)
 
+    # Gate filter — count commas in gates_passed
+    gate_min_map = {
+        "1+ (Data)": 1, "2+ (Safety)": 2, "3+ (Risk)": 3,
+        "4+ (PreFilter)": 4, "5+ (Scoring)": 5, "6 (Bought)": 6,
+    }
+    if gate_filter != "Any" and gate_filter in gate_min_map:
+        min_gates = gate_min_map[gate_filter]
+        # gates_passed has format "G1:Data,G2:Safety,..." — count by commas
+        if min_gates == 1:
+            where_clauses.append("gates_passed IS NOT NULL AND gates_passed != ''")
+        else:
+            # length(gates_passed) - length(replace(gates_passed,',','')) counts commas
+            # commas = gates - 1, so gates >= min_gates means commas >= min_gates - 1
+            where_clauses.append(
+                f"(LENGTH(gates_passed) - LENGTH(REPLACE(gates_passed, ',', ''))) >= {min_gates - 1}"
+            )
+
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
     df_hist = db_query(
         f"""
-        SELECT symbol, token_address, entry_price, position_size,
+        SELECT id, symbol, token_address, entry_price, position_size,
                score, decision, rejection_reason, ai_reasoning,
-               funnel_stage, timestamp
+               funnel_stage, gates_passed, timestamp
         FROM trades
         {where_sql}
         ORDER BY timestamp DESC
@@ -850,107 +1046,273 @@ with tab_history:
         tuple(params + [limit]),
     )
 
+    # ── Render History Cards ─────────────────────────────────────────────────
     if not df_hist.empty:
-        rows = []
-        for _, row in df_hist.iterrows():
-            sym   = str(row["symbol"] or "-")
-            addr  = str(row["token_address"] or "")
-            ep    = float(row["entry_price"] or 0)
-            score = float(row["score"] or 0)
-            dec   = str(row["decision"] or "")
-            stage = str(row["funnel_stage"] or "")
-            ts    = str(row["timestamp"])[:19]
-            rej   = str(row["rejection_reason"] or "")
+        st.caption(f"Showing {len(df_hist)} trades")
 
-            # Parse AI reasoning
-            reason = rej
-            if not reason:
+        for idx, row in df_hist.iterrows():
+            sym    = str(row["symbol"] or "UNKNOWN")
+            addr   = str(row["token_address"] or "")
+            ep     = float(row["entry_price"] or 0)
+            score  = float(row["score"] or 0)
+            dec    = str(row["decision"] or "")
+            stage  = str(row["funnel_stage"] or "")
+            ts     = str(row["timestamp"] or "")[:19]
+            rej    = str(row["rejection_reason"] or "")
+            gates  = str(row["gates_passed"] or "")
+            tid    = int(row["id"] or 0)
+            ai_raw = str(row["ai_reasoning"] or "")
+
+            # Parse AI data once for card + detail
+            ai = {}
+            if ai_raw:
                 try:
-                    ai = json.loads(row["ai_reasoning"] or "{}")
-                    parts = []
-                    if ai.get("sentiment"):
-                        parts.append(ai["sentiment"])
-                    if ai.get("key_signals"):
-                        parts.append(ai["key_signals"][0])
-                    reason = " | ".join(parts) or "-"
+                    ai = json.loads(ai_raw)
                 except Exception:
-                    reason = "-"
+                    pass
 
-            # Live P/L for buys
-            pl_pct = 0
-            if "BUY" in dec and ep > 0:
-                cp = get_live_price(addr)
-                if cp > 0:
-                    pl_pct = (cp - ep) / ep * 100
+            # Token timing
+            pair_created_ms  = ai.get("pair_created_at", 0)
+            token_age_h      = ai.get("token_age_hours", -1)
+            scanned_at       = ai.get("scanned_at", 0)
+            source_tag       = ai.get("source", "")
+            is_mig           = ai.get("is_migration", False)
+            pumpfun_detected = ai.get("pumpfun_detected_at", 0)
 
-            rows.append({
-                "Time":      ts,
-                "Symbol":    sym,
-                "Decision":  dec,
-                "Stage":     stage,
-                "Score":     round(score, 1),
-                "Price":     f"${ep:.8f}" if ep > 0 else "-",
-                "P/L %":     round(pl_pct, 2) if "BUY" in dec else None,
-                "Reason":    reason[:60],
-            })
-
-        df_show = pd.DataFrame(rows)
-
-        def style_decision(v):
-            v = str(v)
-            if "BUY" in v:  return "color: #3fb950; font-weight: bold"
-            if "SELL" in v: return "color: #f0883e; font-weight: bold"
-            if "SKIP" in v: return "color: #f85149"
-            if "HOLD" in v: return "color: #d29922"
-            return ""
-
-        def style_pl(v):
-            if isinstance(v, (int, float)):
-                if v > 0: return "color: #3fb950; font-weight: bold"
-                if v < 0: return "color: #f85149; font-weight: bold"
-            return "color: #8b949e"
-
-        def style_score(v):
-            if isinstance(v, (int, float)):
-                if v >= 65: return "color: #3fb950; font-weight: bold"
-                if v >= 40: return "color: #d29922"
-                return "color: #f85149"
-            return ""
-
-        st.dataframe(
-            df_show.style
-                .map(style_decision, subset=["Decision"])
-                .map(style_pl,       subset=["P/L %"])
-                .map(style_score,    subset=["Score"]),
-            use_container_width=True,
-            height=min(80 + len(df_show) * 38, 650),
-        )
-
-        # Click to see details
-        st.markdown("")
-        st.markdown("**Trade Details** - select a row number")
-        detail_idx = st.number_input("Row #", min_value=0, max_value=len(df_hist)-1, value=0, key="hist_detail")
-        sel_row = df_hist.iloc[detail_idx]
-        addr = str(sel_row["token_address"] or "")
-        with st.expander(f"Details: {sel_row['symbol']} - {sel_row['decision']} - {str(sel_row['timestamp'])[:19]}", expanded=True):
-            dc1, dc2 = st.columns(2)
-            with dc1:
-                st.json({
-                    "symbol": sel_row["symbol"],
-                    "decision": sel_row["decision"],
-                    "score": float(sel_row["score"] or 0),
-                    "price": float(sel_row["entry_price"] or 0),
-                    "funnel_stage": sel_row["funnel_stage"],
-                    "rejection_reason": sel_row["rejection_reason"],
-                })
-            with dc2:
+            created_str = ""
+            if pair_created_ms and pair_created_ms > 0:
                 try:
-                    ai_data = json.loads(sel_row["ai_reasoning"] or "{}")
-                    st.json(ai_data)
+                    created_dt = datetime.fromtimestamp(pair_created_ms / 1000)
+                    created_str = created_dt.strftime("%Y-%m-%d %H:%M")
                 except Exception:
-                    st.caption("No AI reasoning data")
-            if addr:
-                st.markdown(f"[DexScreener](https://dexscreener.com/solana/{addr}) | [Solscan](https://solscan.io/token/{addr})")
+                    pass
+
+            age_str = ""
+            if token_age_h >= 0:
+                if token_age_h < 1:
+                    age_str = f"{token_age_h * 60:.0f}min"
+                elif token_age_h < 24:
+                    age_str = f"{token_age_h:.1f}h"
+                else:
+                    age_str = f"{token_age_h / 24:.1f}d"
+
+            # Gates
+            all_gates = ["G1:Data", "G2:Safety", "G3:Risk", "G4:PreFilter", "G5:Scoring", "G6:Exec"]
+            passed_list = [g.strip() for g in gates.split(",") if g.strip()] if gates else []
+            n_passed = len(passed_list)
+
+            gate_html = ""
+            for g in all_gates:
+                g_short = g.split(":")[0]
+                cls = "gate-pass" if g in passed_list else "gate-fail"
+                gate_html += '<span class="' + cls + '">' + g_short + '</span>'
+
+            # Decision badge
+            if "BUY" in dec:
+                dec_cls = "badge-profit"
+            elif "SELL" in dec:
+                dec_cls = "badge-neutral"
+            else:
+                dec_cls = "badge-loss"
+
+            # Source label
+            src_html = ""
+            if source_tag:
+                src_label = "MIGRATION" if is_mig else source_tag
+                src_cls = "gate-pass" if is_mig else "info-badge"
+                src_html = '<span class="' + src_cls + '">' + src_label + '</span>'
+
+            # Score
+            if score >= 65:     s_cls = "profit"
+            elif score > 0:     s_cls = "loss"
+            else:               s_cls = ""
+
+            addr_short = (addr[:8] + "..." + addr[-6:]) if len(addr) > 14 else addr
+            reason_safe = (rej if rej else "-").replace("<", "&lt;").replace(">", "&gt;")
+
+            # Discovery delay
+            delay_html = ""
+            if scanned_at and pair_created_ms and pair_created_ms > 0:
+                delay_sec = scanned_at - (pair_created_ms / 1000)
+                if delay_sec > 0:
+                    if delay_sec < 60:      d_str = str(int(delay_sec)) + "s"
+                    elif delay_sec < 3600:  d_str = str(round(delay_sec / 60, 1)) + "min"
+                    else:                   d_str = str(round(delay_sec / 3600, 1)) + "h"
+                    delay_html = '<span class="info-badge">Delay: ' + d_str + '</span>'
+
+            # ── Card: 2 rows ─────────────────────────────────────────────
+            card = []
+            card.append('<div class="hist-card">')
+
+            # Row 1: Symbol | Decision | Source | Score | Gates | ID
+            card.append('<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">')
+            card.append('<b style="color:#f3f4f6;font-size:1.05rem">' + sym + '</b>')
+            card.append('<span class="pos-badge ' + dec_cls + '">' + dec + '</span>')
+            card.append(src_html)
+            if score > 0:
+                card.append('<span class="' + s_cls + '" style="font-size:0.85rem;font-weight:700">' + str(round(score, 1)) + '</span>')
+            card.append('<span style="flex:1"></span>')  # spacer
+            card.append(gate_html)
+            card.append('<span style="color:#6b7280;font-size:0.7rem">#' + str(tid) + '</span>')
+            card.append('</div>')
+
+            # Row 2: Address | Stage | Timestamps | Age | Delay
+            card.append('<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px">')
+            card.append('<span class="info-badge">' + addr_short + '</span>')
+            card.append('<span class="info-badge">' + stage + '</span>')
+            card.append('<span class="info-badge">' + ts + '</span>')
+            if created_str:
+                card.append('<span class="info-badge">Created: ' + created_str + '</span>')
+            if age_str:
+                card.append('<span class="info-badge">Age: ' + age_str + '</span>')
+            if delay_html:
+                card.append(delay_html)
+            card.append('</div>')
+
+            # Row 3: Reason (truncated)
+            card.append('<div style="color:#9ca3af;font-size:0.78rem;line-height:1.4;word-break:break-word">')
+            card.append(reason_safe[:250])
+            card.append('</div>')
+
+            card.append('</div>')
+            st.markdown("".join(card), unsafe_allow_html=True)
+
+            # ── Expandable Detail ────────────────────────────────────────
+            with st.expander("Details  |  " + sym + "  #" + str(tid), expanded=False):
+                det_l, det_m, det_r = st.columns([2.5, 2, 1.5])
+
+                with det_l:
+                    st.markdown("**Decision Reason**")
+                    if rej:
+                        st.code(rej, language=None)
+                    else:
+                        st.caption("No reason logged")
+
+                    if ai:
+                        signals = ai.get("key_signals", [])
+                        if signals:
+                            st.markdown("**Signals at Scan**")
+                            for sig in signals:
+                                st.markdown("- `" + str(sig) + "`")
+
+                        flags = ai.get("risk_flags", [])
+                        if flags:
+                            is_clean = flags == ["No_Risk_Flags"]
+                            color = "#4ade80" if is_clean else "#f87171"
+                            st.markdown(
+                                '<span style="color:' + color + '">' + ", ".join(flags) + '</span>',
+                                unsafe_allow_html=True,
+                            )
+                        st.caption("Hype: " + str(ai.get("hype_score", "?")) + "/100  |  " + str(ai.get("sentiment", "?")))
+
+                with det_m:
+                    st.markdown("**Token Timeline**")
+
+                    tl_rows = []
+
+                    # 1. Pair creation (DexScreener)
+                    if created_str:
+                        tl_rows.append("DexScreener pair created: **" + created_str + "**")
+                    else:
+                        tl_rows.append("DexScreener pair created: _not available_")
+
+                    # 2. PumpPortal detection
+                    if pumpfun_detected and pumpfun_detected > 0:
+                        pf_dt = datetime.fromtimestamp(pumpfun_detected).strftime("%Y-%m-%d %H:%M:%S")
+                        tl_rows.append("PumpPortal detected: **" + pf_dt + "**")
+                        # Delay between PumpPortal and DexScreener
+                        if pair_created_ms and pair_created_ms > 0:
+                            pf_to_dex = (pair_created_ms / 1000) - pumpfun_detected
+                            if abs(pf_to_dex) < 86400:  # only if within 24h
+                                if pf_to_dex > 0:
+                                    tl_rows.append("PumpPortal -> DexScreener: **" + str(round(pf_to_dex / 60, 1)) + " min**")
+                                else:
+                                    tl_rows.append("DexScreener had data **before** PumpPortal event")
+
+                    # 3. Token age
+                    if age_str:
+                        tl_rows.append("Token age at scan: **" + age_str + "**")
+
+                    # 4. Bot scan time
+                    tl_rows.append("Bot scanned at: **" + ts + "**")
+
+                    # 5. Discovery delay (bot scan vs creation)
+                    if scanned_at and pair_created_ms and pair_created_ms > 0:
+                        delay_sec = scanned_at - (pair_created_ms / 1000)
+                        if delay_sec > 0:
+                            if delay_sec < 60:      d_str = str(int(delay_sec)) + "s"
+                            elif delay_sec < 3600:  d_str = str(round(delay_sec / 60, 1)) + " min"
+                            else:                   d_str = str(round(delay_sec / 3600, 1)) + "h"
+                            tl_rows.append("Discovery delay: **" + d_str + "** (creation to scan)")
+
+                    # 6. Source
+                    if is_mig:
+                        tl_rows.append("Source: **PumpPortal WebSocket** (Migration)")
+                    elif source_tag:
+                        tl_rows.append("Source: **DexScreener** (" + source_tag + ")")
+
+                    for r in tl_rows:
+                        st.markdown(r)
+
+                    # Market snapshot
+                    md = ai.get("market_data", {})
+                    cd = ai.get("chain_data", {})
+                    if md:
+                        st.markdown("**Market Data (at scan)**")
+                        snap = []
+                        if md.get("liquidity_usd"):   snap.append("Liq: $" + f"{md['liquidity_usd']:,.0f}")
+                        if md.get("market_cap"):       snap.append("MCap: $" + f"{md['market_cap']:,.0f}")
+                        if md.get("volume_24h"):       snap.append("Vol24h: $" + f"{md['volume_24h']:,.0f}")
+                        if md.get("change_5m") is not None: snap.append("5m: " + f"{md['change_5m']:+.1f}%")
+                        if md.get("change_1h") is not None: snap.append("1h: " + f"{md['change_1h']:+.1f}%")
+                        if md.get("buys_h1") is not None:   snap.append("B/S: " + str(md['buys_h1']) + "/" + str(md.get('sells_h1', 0)))
+                        if cd.get("top_10_pct"):       snap.append("Top10: " + f"{cd['top_10_pct']:.0f}%")
+                        if cd.get("holder_count"):     snap.append("Holders: " + str(cd['holder_count']))
+                        for s in snap:
+                            st.caption(s)
+
+                with det_r:
+                    st.markdown("**Gates (" + str(n_passed) + "/6)**")
+                    gate_pct = n_passed / 6
+                    gc = "#4ade80" if n_passed >= 5 else "#fbbf24" if n_passed >= 3 else "#f87171"
+                    gw = str(int(gate_pct * 100))
+                    st.markdown(
+                        '<div style="background:#2a2d35;border-radius:4px;height:8px;margin:6px 0 10px 0">'
+                        '<div style="background:' + gc + ';border-radius:4px;height:8px;width:' + gw + '%"></div>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    for g in all_gates:
+                        g_name = g.split(":")[1]
+                        passed = g in passed_list
+                        icon = "+" if passed else "-"
+                        color = "#4ade80" if passed else "#4b5563"
+                        st.markdown('<span style="color:' + color + '">' + icon + ' ' + g + '</span>', unsafe_allow_html=True)
+
+                    st.markdown("---")
+                    st.markdown("**Links**")
+                    if addr:
+                        st.markdown(
+                            "[DexScreener](https://dexscreener.com/solana/" + addr + ")  \n"
+                            "[Solscan](https://solscan.io/token/" + addr + ")  \n"
+                            "[RugCheck](https://rugcheck.xyz/tokens/" + addr + ")  \n"
+                            "[Birdeye](https://birdeye.so/token/" + addr + "?chain=solana)  \n"
+                            "[Jupiter](https://jup.ag/swap/SOL-" + addr + ")  \n"
+                            "[Pump.fun](https://pump.fun/" + addr + ")"
+                        )
+                    st.code(addr, language=None)
+
+                # Strategy Insight
+                insight_text = _generate_strategy_insight(dec, stage, n_passed, ai, rej, token_age_h)
+                if insight_text:
+                    st.markdown(
+                        '<div class="insight-box">'
+                        '<div class="title">Strategy Insight</div>'
+                        '<div class="text">' + insight_text + '</div>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+
     else:
         st.info("No trades matching your filters.")
 
@@ -1014,13 +1376,13 @@ with tab_analytics:
     # Score distribution
     df_scores = db_query("""
         SELECT score, decision FROM trades
-        WHERE score > 0 AND (decision LIKE '%BUY%' OR decision = 'HOLD' OR decision = 'SKIP')
+        WHERE score > 0 AND (decision LIKE '%BUY%' OR decision = 'REJECT' OR decision = 'HOLD' OR decision = 'SKIP')
     """)
     if not df_scores.empty:
         st.markdown("**Score Distribution**")
         fig_score = px.histogram(
             df_scores, x="score", color="decision", nbins=20,
-            color_discrete_map={"BUY": "#3fb950", "BUY (SIMULATED)": "#2ea043", "HOLD": "#d29922", "SKIP": "#f85149"},
+            color_discrete_map={"BUY": "#3fb950", "BUY (SIMULATED)": "#2ea043", "REJECT": "#f85149", "HOLD": "#d29922", "SKIP": "#f85149"},
         )
         fig_score.update_layout(
             paper_bgcolor="#0d1117", plot_bgcolor="#161b22",

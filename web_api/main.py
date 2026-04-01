@@ -67,6 +67,9 @@ async def get_trade_stats():
     skips   = conn.execute("SELECT COUNT(*) as c FROM trades WHERE decision IN ('SKIP','HOLD')").fetchone()["c"]
 
     # Funnel analysis
+    data_fail = conn.execute(
+        "SELECT COUNT(*) as c FROM trades WHERE funnel_stage='DATA_CHECK'"
+    ).fetchone()["c"]
     safety_fail = conn.execute(
         "SELECT COUNT(*) as c FROM trades WHERE funnel_stage='SAFETY_CHECK'"
     ).fetchone()["c"]
@@ -76,6 +79,9 @@ async def get_trade_stats():
     scoring_fail = conn.execute(
         "SELECT COUNT(*) as c FROM trades WHERE funnel_stage='SCORING'"
     ).fetchone()["c"]
+    exec_limit = conn.execute(
+        "SELECT COUNT(*) as c FROM trades WHERE funnel_stage='EXEC_LIMIT'"
+    ).fetchone()["c"]
     bought = conn.execute(
         "SELECT COUNT(*) as c FROM trades WHERE funnel_stage='BUY_EXEC'"
     ).fetchone()["c"]
@@ -84,9 +90,11 @@ async def get_trade_stats():
     return {
         "total": total, "buys": buys, "sells": sells, "skips": skips,
         "funnel": {
+            "data_fail": data_fail,
             "safety_fail": safety_fail,
             "pre_filter_fail": pre_filter_fail,
             "scoring_fail": scoring_fail,
+            "exec_limit": exec_limit,
             "bought": bought,
         }
     }

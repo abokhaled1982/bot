@@ -301,6 +301,7 @@ class PositionMonitor:
             price=current_price,
             rejection_reason=reason,
             funnel_stage=funnel_stage,
+            gates_passed="G1:Data,G2:Safety,G3:Risk,G4:PreFilter,G5:Scoring,G6:Exec,POSITION",
         )
 
     # ── Position schließen ────────────────────────────────────────────────────

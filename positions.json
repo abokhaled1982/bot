@@ -1,1 +1,24 @@
-{}
+{
+  "9KRxism3HFpESm54SLMJ52WxM4Gq9Z4bLsSABZeupump": {
+    "symbol": "Lobstar",
+    "entry_price": 4.223e-05,
+    "created_at": 1775028229.5584645,
+    "remaining_pct": 1.0,
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": 5.005e-05,
+    "trailing_active": false
+  },
+  "BRFnGCJsDhuJBHG4GhGkVcCZj8gymhrsvrbYmGAJpump": {
+    "symbol": "MIA",
+    "entry_price": 7.309e-05,
+    "created_at": 1775028401.9033544,
+    "remaining_pct": 1.0,
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": 7.336e-05,
+    "trailing_active": false
+  }
+}

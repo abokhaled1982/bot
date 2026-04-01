@@ -167,16 +167,18 @@ class TradeExecutor:
 
     # ── DB ─────────────────────────────────────────────────────────────────────
     def _log_to_db(self, symbol, address, price, size, score, decision,
-                   rejection_reason=None, ai_reasoning=None, funnel_stage="FINAL"):
+                   rejection_reason=None, ai_reasoning=None, funnel_stage="FINAL",
+                   gates_passed=None):
         try:
             conn = sqlite3.connect(self.db_path)
             c    = conn.cursor()
             c.execute(
                 "INSERT INTO trades (token_address, symbol, entry_price, position_size, "
-                "score, decision, rejection_reason, ai_reasoning, funnel_stage, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "score, decision, rejection_reason, ai_reasoning, funnel_stage, timestamp, gates_passed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (address, symbol, price, size, score, decision,
-                 rejection_reason, ai_reasoning, funnel_stage, datetime.now())
+                 rejection_reason, ai_reasoning, funnel_stage, datetime.now(),
+                 gates_passed)
             )
             conn.commit()
             conn.close()
@@ -210,6 +212,7 @@ class TradeExecutor:
         funnel_stage:     str   = "FINAL",
         confidence:       str   = "LOW",
         liquidity_usd:    float = 0.0,
+        gates_passed:     str   = None,
     ) -> dict:
 
         position_size = self._calculate_position_size(confidence)
@@ -218,7 +221,8 @@ class TradeExecutor:
         # ── Kein Trade ─────────────────────────────────────────────────────────
         if decision not in ["BUY", "SELL"]:
             self._log_to_db(token_symbol, token_address, price, 0, score,
-                            decision, rejection_reason, ai_reasoning, funnel_stage)
+                            decision, rejection_reason, ai_reasoning, funnel_stage,
+                            gates_passed)
             return None
 
         trade_label = decision if not self.dry_run else f"{decision} (SIMULATED)"
@@ -227,7 +231,8 @@ class TradeExecutor:
         if self.dry_run:
             logger.info(f"[DRY-RUN] {decision} ${position_size} | {token_symbol} @ ${price}")
             self._log_to_db(token_symbol, token_address, price, position_size,
-                            score, trade_label, rejection_reason, ai_reasoning, funnel_stage)
+                            score, trade_label, rejection_reason, ai_reasoning, funnel_stage,
+                            gates_passed)
             return {"status": "success", "dry_run": True}
 
         # ── LIVE ───────────────────────────────────────────────────────────────
@@ -240,7 +245,7 @@ class TradeExecutor:
             logger.warning(f"[{token_symbol}] {msg} → Simulation")
             self._log_to_db(token_symbol, token_address, price, position_size,
                             score, f"{decision} (SIMULATED - NO NETWORK)",
-                            msg, ai_reasoning, funnel_stage)
+                            msg, ai_reasoning, funnel_stage, gates_passed)
             return {"status": "success", "dry_run": True}
 
         logger.info(f"[LIVE] {decision} {token_symbol} @ ${price}")
@@ -323,11 +328,12 @@ class TradeExecutor:
             self._log_to_db(
                 token_symbol, token_address, price, position_size,
                 score, trade_label, rejection_reason, ai_reasoning, funnel_stage,
+                gates_passed,
             )
             return {"status": "success", "tx": tx_id}
 
         except Exception as e:
             logger.error(f"[LIVE] Trade Fehler für {token_symbol}: {e}")
             self._log_to_db(token_symbol, token_address, price, 0, score,
-                            "ERROR", str(e), ai_reasoning, funnel_stage)
+                            "ERROR", str(e), ai_reasoning, funnel_stage, gates_passed)
             return {"status": "error", "message": str(e)}
