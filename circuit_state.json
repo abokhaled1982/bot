@@ -7,27 +7,23 @@
     "www.investopedia.com": 49126.080263501,
     "www.youtube.com": 49129.782184362,
     "www.marketbeat.com": 49158.061714966,
-    "finviz.com": 49157.984710776,
-    "www.marketwatch.com": 14829.446376814,
-    "www.bis.org": 14832.032156362,
-    "www.imf.org": 14833.275236747,
-    "www.cftc.gov": 14834.197541439
+    "finviz.com": 49157.984710776
   },
   "failures": {
-    "www.marketwatch.com": 3,
+    "www.marketwatch.com": 1,
     "www.cnbc.com": 3,
-    "www.bis.org": 3,
+    "www.bis.org": 1,
     "www.sec.gov": 3,
-    "www.cftc.gov": 3,
+    "www.cftc.gov": 1,
     "www.barrons.com": 3,
     "defillama.com": 3,
     "www.youtube.com": 3,
     "www.investopedia.com": 3,
     "finviz.com": 9,
     "www.marketbeat.com": 27,
-    "www.zacks.com": 1,
+    "www.zacks.com": 0,
     "cryptoslate.com": 0,
     "news.google.com": 0,
-    "www.imf.org": 3
+    "www.imf.org": 0
   }
 }
