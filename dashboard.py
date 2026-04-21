@@ -18,6 +18,7 @@ from dashboard.components import fmt_usd, fmt_pct
 from dashboard.tabs import (
     render_positions, render_history,
     render_trade, render_analytics, render_logs,
+    render_live_market,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -118,11 +119,12 @@ with st.sidebar:
     )
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_pos, tab_hist, tab_analytics, tab_trade, tab_logs = st.tabs([
+tab_pos, tab_hist, tab_analytics, tab_trade, tab_live, tab_logs = st.tabs([
     "📌 Positions",
     "📋 History",
     "📊 Analytics",
     "🔄 Trade",
+    "📡 Live Market",
     "📝 Logs",
 ])
 
@@ -130,4 +132,5 @@ with tab_pos:       render_positions()
 with tab_hist:      render_history()
 with tab_analytics: render_analytics()
 with tab_trade:     render_trade()
+with tab_live:      render_live_market()
 with tab_logs:      render_logs()

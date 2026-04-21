@@ -1,63 +1,21 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environment
+# Python Virtual Environment
 venv/
-env/
-ENV/
 .venv/
-.python-version
-
-# Distribution / packaging
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Logs and local files
-*.log
-*.sqlite3
-*.db
-*.pid
-*.gz
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# PyCharm / VSCode / other IDEs
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
-
-# macOS & Linux
-.DS_Store
-*.swp
-
-# dotenv
+env/
 .env
-*.env
+
+# Database and Session files
+*.db
+*.session
+*.db-journal
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+STOP_BOT
+MANUAL_TRADE
+.env
+venv

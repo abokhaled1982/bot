@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:pumpportal.fun)",
+      "WebFetch(domain:docs.birdeye.so)",
+      "WebFetch(domain:api.dexscreener.com)",
+      "WebFetch(domain:bds.birdeye.so)",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\(''main.py'', doraise=True\\); print\\(''main.py OK''\\)\")",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\(''src/execution/executor.py'', doraise=True\\); print\\(''executor.py OK''\\)\")",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\(''src/execution/monitor.py'', doraise=True\\); print\\(''monitor.py OK''\\)\")",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\(''web_api/main.py'', doraise=True\\); print\\(''web_api OK''\\)\")",
+      "Bash(ls /home/alghobariw/.openclaw/workspace/memecoin_bot/*.db /home/alghobariw/.openclaw/workspace/memecoin_bot/*.sqlite* /home/alghobariw/.openclaw/workspace/memecoin_bot/*.json /home/alghobariw/.openclaw/workspace/memecoin_bot/data/*)"
+    ]
+  }
+}
