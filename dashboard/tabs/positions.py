@@ -35,12 +35,11 @@ def render():
 
     st.markdown("")
 
-    # ── Live positions (auto-refresh) ─────────────────────────────────────────
     @st.fragment(run_every="10s")
     def _render_open():
         positions = get_reconciled_positions(WALLET_ADDRESS)
         if not positions:
-            st.info("No open positions — wallet is empty.")
+            st.info("Keine offenen Binance Positionen im Paper Trading.")
             return
 
         # Portfolio summary
@@ -50,7 +49,7 @@ def render():
             ep  = float(pos.get("entry_price", 0))
             rem = float(pos.get("remaining_pct", 1.0))
             cp  = get_live_price(addr)
-            inv = POSITION_SIZE_USD * rem
+            inv = float(pos.get("size_usdt", POSITION_SIZE_USD)) * rem
             cur = (inv / ep * cp) if ep > 0 and cp > 0 else inv
             total_invested += inv
             total_current  += cur
@@ -73,13 +72,13 @@ def render():
             cp      = get_live_price(addr)
             ath     = float(pos.get("highest_price", ep))
             trail   = pos.get("trailing_active", False)
-            created = pos.get("created_at", 0)
+            created = pos.get("opened_at", pos.get("created_at", 0))
             age_h   = (time.time() - created) / 3600 if created else 0
             buy_ts  = __import__('datetime').datetime.fromtimestamp(created).strftime("%d.%m %H:%M") if created else "—"
 
             pl_pct   = ((cp - ep) / ep * 100)       if ep > 0 and cp > 0 else 0
-            pl_usd   = (POSITION_SIZE_USD * rem / ep * cp - POSITION_SIZE_USD * rem) if ep > 0 and cp > 0 else 0
-            invested = POSITION_SIZE_USD * rem
+            invested = float(pos.get("size_usdt", POSITION_SIZE_USD)) * rem
+            pl_usd   = (invested / ep * cp - invested) if ep > 0 and cp > 0 else 0
             cur_val  = (invested / ep * cp) if ep > 0 and cp > 0 else invested
             sg       = "+" if pl_pct >= 0 else ""
             clr      = "profit" if pl_pct >= 0 else "loss"
@@ -165,30 +164,29 @@ def render():
                     if info:
                         st.markdown(
                             f'<div style="display:flex;gap:20px;flex-wrap:wrap;padding:8px 0;border-top:1px solid #151b27;margin-top:8px">'
-                            f'<span style="color:#7cb4ff;font-size:0.85rem">💧 Liq: <span style="color:#ffffff">{fmt_usd(info.get("liquidity", 0))}</span></span>'
-                            f'<span style="color:#7cb4ff;font-size:0.85rem">📈 MCap: <span style="color:#ffffff">{fmt_usd(info.get("market_cap", 0))}</span></span>'
-                            f'<span style="color:#7cb4ff;font-size:0.85rem">5m: <span style="color:#ffffff">{fmt_pct(info.get("change_5m", 0))}</span></span>'
-                            f'<span style="color:#7cb4ff;font-size:0.85rem">1h: <span style="color:#ffffff">{fmt_pct(info.get("change_1h", 0))}</span></span>'
-                            f'<span style="color:#7cb4ff;font-size:0.85rem">24h: <span style="color:#ffffff">{fmt_pct(info.get("change_24h", 0))}</span></span>'
+                            f'<span style="color:#7cb4ff;font-size:0.85rem">24h Vol: <span style="color:#ffffff">{fmt_usd(info.get("volume_24h", 0))}</span></span>'
+                            f'<span style="color:#7cb4ff;font-size:0.85rem">24h Change: <span style="color:#ffffff">{fmt_pct(info.get("change_24h", 0))}</span></span>'
+                            f'<span style="color:#7cb4ff;font-size:0.85rem">24h High: <span style="color:#ffffff">${info.get("high_24h", 0):.4f}</span></span>'
+                            f'<span style="color:#7cb4ff;font-size:0.85rem">24h Low: <span style="color:#ffffff">${info.get("low_24h", 0):.4f}</span></span>'
                             f'</div>',
                             unsafe_allow_html=True,
                         )
 
                     # Links
-                    dex_url = info.get("dex_url", "") if info else ""
+                    binance_sym = addr.replace("USDT", "_USDT")
                     st.markdown(
                         f'<div style="display:flex;gap:12px;margin-top:4px">'
-                        f'<a href="{dex_url or f"https://dexscreener.com/solana/{addr}"}" target="_blank" style="color:#3b8bff;font-size:0.78rem;text-decoration:none">📊 DexScreener</a>'
-                        f'<a href="https://solscan.io/token/{addr}" target="_blank" style="color:#3b8bff;font-size:0.78rem;text-decoration:none">🔗 Solscan</a>'
+                        f'<a href="https://www.binance.com/en/trade/{binance_sym}?type=spot" target="_blank" style="color:#3b8bff;font-size:0.88rem;font-weight:600;text-decoration:none">📊 Open in Binance</a>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
 
                 with action_col:
-                    sell_pct = st.selectbox("Sell %", [25, 50, 75, 100], index=3, key=f"sell_{addr}")
-                    if st.button(f"SELL {sell_pct}%", key=f"sellbtn_{addr}", type="primary", use_container_width=True):
-                        with open("MANUAL_TRADE", "w") as f:
-                            json.dump({"action": "SELL", "address": addr, "sell_pct": sell_pct / 100}, f)
-                        st.success(f"Sell {sell_pct}% queued for {sym}")
+                    st.markdown(
+                        f'<div style="text-align:center;padding:12px;background:rgba(59,139,255,0.05);border:1px solid rgba(59,139,255,0.15);border-radius:8px">'
+                        f'<div style="color:#7cb4ff;font-size:0.75rem;font-weight:700">🤖 AUTO-MANAGED</div>'
+                        f'<div style="color:#94a3b8;font-size:0.7rem;margin-top:4px">Binance OCO aktiv</div>'
+                        f'</div>', unsafe_allow_html=True
+                    )
 
     _render_open()

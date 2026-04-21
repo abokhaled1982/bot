@@ -32,10 +32,10 @@ def _get_binance_price(symbol: str) -> float:
 def _load_positions() -> dict:
     if os.path.exists("positions.json"):
         try:
-            with open("positions.json") as f:
+            with open("positions.json", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"HISTORY LOAD POS ERROR: {e}")
     return {}
 
 
@@ -128,7 +128,7 @@ def render():
         for sym, pos in positions.items():
             ep     = float(pos.get("entry_price", 0))
             size   = float(pos.get("size_usdt", POSITION_SIZE_USD))
-            opened = pos.get("opened_at", 0)
+            opened = pos.get("opened_at", pos.get("created_at", 0))
             age_m  = int((datetime.now().timestamp() - opened) / 60) if opened else 0
 
             live_price = _get_binance_price(sym)
