@@ -26,26 +26,21 @@ from loguru import logger
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 WS_URL_MINI_TICKER = "wss://stream.binance.com:9443/ws/!miniTicker@arr"
-WS_URL_BASE        = "wss://stream.binance.com:9443/ws"
 
 # Candidate thresholds
-MIN_VOLUME_USDT_24H   = float(os.getenv("BN_MIN_VOLUME_24H",    "1000000"))   # $1M min daily vol
-MIN_PRICE_USDT        = float(os.getenv("BN_MIN_PRICE",         "0.000001"))  # filter dust
-VOLUME_SPIKE_FACTOR   = float(os.getenv("BN_VOLUME_SPIKE",      "2.0"))       # 2× recent average
-MOMENTUM_MIN_PCT      = float(os.getenv("BN_MOMENTUM_MIN_PCT",  "0.5"))       # +0.5% 5m change (or 24h fallback at startup)
-MAX_CANDIDATES        = int(os.getenv("BN_MAX_CANDIDATES",       "20"))
+MIN_VOLUME_USDT_24H = float(os.getenv("BN_MIN_VOLUME_24H",  "500000"))   # $500k min daily vol
+MIN_PRICE_USDT      = float(os.getenv("BN_MIN_PRICE",       "0.000001")) # filter dust
+MOMENTUM_MIN_24H    = float(os.getenv("BN_MOMENTUM_MIN",    "1.0"))      # +1% 24h change
+MAX_CANDIDATES      = int(os.getenv("BN_MAX_CANDIDATES",    "30"))
 
-# Reconnect settings
-RECONNECT_DELAY_BASE  = 5   # seconds
-RECONNECT_DELAY_MAX   = 60  # seconds
+# Reconnect
+RECONNECT_DELAY_BASE = 5
+RECONNECT_DELAY_MAX  = 60
 
-# Tokens to always exclude
+# Stablecoins / leveraged tokens to skip
+_BLACKLIST_EXACT    = {"USDTUSDT", "EURUSDT", "GBPUSDT", "AUDUSDT"}
 _BLACKLIST_SUFFIXES = {"UPUSDT", "DOWNUSDT", "BULLUSDT", "BEARUSDT"}
 _BLACKLIST_PREFIXES = {"BUSD", "USDC", "TUSD", "DAI", "FDUSD", "USDP"}
-_BLACKLIST_EXACT    = {
-    "USDTUSDT", "EURUSDT", "GBPUSDT", "AUDUSDT",
-    "BRLNUSDT", "TRXUSDT",  # high noise
-}
 
 
 def _is_blacklisted(symbol: str) -> bool:
@@ -107,12 +102,7 @@ class BinanceStreamAdapter:
 
     async def _connect_mini_ticker(self) -> None:
         logger.info(f"[BINANCE] Connecting to {WS_URL_MINI_TICKER}")
-        async with websockets.connect(
-            WS_URL_MINI_TICKER,
-            ping_interval=20,
-            ping_timeout=10,
-            close_timeout=5,
-        ) as ws:
+        async with websockets.connect(WS_URL_MINI_TICKER) as ws:
             self._connected = True
             self._reconnect_delay = RECONNECT_DELAY_BASE
             logger.info("[BINANCE] ✅ Connected — receiving all USDT mini-tickers")
@@ -191,47 +181,37 @@ class BinanceStreamAdapter:
 
     def _compute_candidates(self) -> list[dict]:
         """
-        Score and rank all current tickers.
-        Returns top N candidates sorted by momentum score.
+        Score and rank all current tickers by 24h momentum + volume.
+        The mini-ticker gives us 24h change % directly — use that as the
+        primary signal since rolling 60s volume barely changes.
         """
         scored = []
 
         for symbol, td in self._tickers.items():
             vol_24h   = td["volume_24h"]
-            change_5m = td["change_5m"]
-            change_1m = td["change_1m"]
-            price     = td["price_usd"]
+            change_24h = td["change_24h"]
+            change_5m  = td.get("change_5m", 0)
+            change_1m  = td.get("change_1m", 0)
 
-            # Volume spike: compare current 24h vol to rolling average
-            history = list(self._volume_history[symbol])
-            if len(history) >= 10:
-                avg_vol = sum(history[:-1]) / (len(history) - 1)
-                spike   = vol_24h / avg_vol if avg_vol > 0 else 1.0
-            else:
-                spike = 1.0
-
-            td["volume_spike"] = round(spike, 2)
-
-            # Use 5m momentum if available, fall back to 24h / 1m at startup
-            has_5m_history = symbol in self._price_5m_ago
-            momentum = change_5m if has_5m_history else (td["change_24h"] / 4.8)  # ~5m equiv
-
-            # Score: momentum + volume spike
-            score = (
-                momentum * 2.0 +
-                change_1m * 1.0 +
-                min(spike, 5.0) * 5.0
-            )
-
-            # Only include if positive momentum and meaningful volume spike
-            if momentum < MOMENTUM_MIN_PCT:
-                continue
-            if spike < VOLUME_SPIKE_FACTOR and len(history) >= 10:
+            # Primary filter: coin must be going UP on 24h basis
+            if change_24h < MOMENTUM_MIN_24H:
                 continue
 
+            # Volume tier score (0–40 pts)
+            if   vol_24h >= 500_000_000: vol_pts = 40
+            elif vol_24h >= 100_000_000: vol_pts = 30
+            elif vol_24h >= 50_000_000:  vol_pts = 20
+            elif vol_24h >= 10_000_000:  vol_pts = 15
+            elif vol_24h >= 1_000_000:   vol_pts = 10
+            else:                        vol_pts = 5
+
+            # Momentum score (0–60 pts): reward coins with strongest 24h move
+            mom_pts = min(change_24h * 3, 60)
+
+            score = vol_pts + mom_pts
+            td["volume_spike"] = 1.0  # placeholder until kline data available
             scored.append((score, {**td}))
 
-        # Sort descending by score
         scored.sort(key=lambda x: x[0], reverse=True)
         return [item for _, item in scored[:MAX_CANDIDATES]]
 

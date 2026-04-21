@@ -12,23 +12,20 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
+@st.cache_resource
 def _get_adapter():
     """Return (or create) the singleton BinanceStreamAdapter."""
-    if "binance_adapter" not in st.session_state:
-        from src.adapters.binance_stream import BinanceStreamAdapter
-        adapter = BinanceStreamAdapter()
+    from src.adapters.binance_stream import BinanceStreamAdapter
+    adapter = BinanceStreamAdapter()
 
-        def _run():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(adapter.start())
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(adapter.start())
 
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        st.session_state["binance_adapter"] = adapter
-        st.session_state["binance_thread"]  = t
-
-    return st.session_state["binance_adapter"]
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return adapter
 
 
 def render():
@@ -101,6 +98,8 @@ def render():
 
     if not tickers:
         st.info("⏳ Verbinde mit Binance... Bitte 2–3 Sekunden warten.")
+        time.sleep(1)
+        st.rerun()
         return
 
     # ── Two-column layout ─────────────────────────────────────────────────────

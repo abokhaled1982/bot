@@ -254,6 +254,6 @@ async def main_loop() -> None:
 
         logger.info(
             f"── Scan #{scan} done | Bought: {bought} | "
-            f"Positions: {len(positions)}/{MAX_POSITIONS} | sleeping 30s ──"
+            f"Positions: {len(positions)}/{MAX_POSITIONS} | next scan in 5s ──"
         )
-        await asyncio.sleep(30)
+        await asyncio.sleep(5)
