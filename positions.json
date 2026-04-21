@@ -1,1 +1,27 @@
-{}
+{
+  "\u5e01\u5b89\u4eba\u751fUSDT": {
+    "symbol": "\u5e01\u5b89\u4eba\u751fUSDT",
+    "entry_price": 0.4787,
+    "size_usdt": 10.0,
+    "opened_at": 1776799654.4926097,
+    "change_24h": 6.68598172498329,
+    "score": 46.4
+  },
+  "EULUSDT": {
+    "symbol": "EULUSDT",
+    "entry_price": 1.453,
+    "size_usdt": 10.0,
+    "opened_at": 1776799659.832955,
+    "change_24h": 18.51549755301795,
+    "score": 44.5
+  },
+  "USDCUSDT": {
+    "symbol": "USDCUSDT",
+    "entry_price": 0.99956,
+    "qty": 10.0,
+    "size_usdt": 10.0,
+    "opened_at": 1776801800.271126,
+    "order_id": "DRY_1776801799",
+    "dry_run": true
+  }
+}

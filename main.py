@@ -63,7 +63,7 @@ async def _main() -> None:
         level="INFO", enqueue=True,
     )
 
-    from src.bot.binance_pipeline import main_loop
+    from src.bot.orderflow_pipeline import main_loop
     await main_loop()
 
 

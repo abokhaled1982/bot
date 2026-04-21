@@ -1,11 +1,23 @@
 """
 src/bot/binance_pipeline.py — Binance Crypto Trading Pipeline (G1–G6)
+
+Data available from mini-ticker (real-time, ~1s):
+  • change_24h   — 24h price change %
+  • volume_24h   — 24h quote volume in USDT
+  • high_24h     — 24h high price
+  • low_24h      — 24h low price
+  • price_usd    — current price
+  • change_1m    — calculated from rolling price history (after ~1min)
+  • change_5m    — calculated from rolling price history (after ~5min)
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import sqlite3
 import time
+from datetime import datetime
 
 from loguru import logger
 from src.adapters.binance_stream import BinanceStreamAdapter
@@ -17,134 +29,118 @@ POSITION_SIZE    = float(os.getenv("BINANCE_POSITION_SIZE_USDT", "10.0"))
 STOP_LOSS_PCT    = float(os.getenv("BINANCE_STOP_LOSS_PCT", "5.0"))
 TAKE_PROFIT_PCT  = float(os.getenv("BINANCE_TAKE_PROFIT_PCT", "15.0"))
 
-# G2: Noise filter thresholds
-G2_MAX_5M_SPIKE  = float(os.getenv("BN_G2_MAX_5M", "15.0"))   # block extreme pumps
-G2_MIN_24H       = float(os.getenv("BN_G2_MIN_24H", "-20.0"))  # block crashes
+# G1: Liquidity gate
+G1_MIN_VOLUME    = float(os.getenv("BN_MIN_VOLUME_24H", "5000000"))   # $5M minimum
+G1_MAX_DATA_AGE  = 30  # seconds
 
-# G3: Technical thresholds (used once kline data is available)
-G3_RSI_MIN       = float(os.getenv("BN_RSI_MIN", "35.0"))
-G3_RSI_MAX       = float(os.getenv("BN_RSI_MAX", "68.0"))
+# G2: Noise/crash filter
+G2_MIN_24H       = float(os.getenv("BN_G2_MIN_24H", "-15.0"))   # block crashes
+G2_MAX_VOLATILITY = float(os.getenv("BN_G2_MAX_VOL", "50.0"))   # max High/Low range %
 
-# G4: Momentum filter
-G4_MOMENTUM_MIN  = float(os.getenv("BN_MOMENTUM_MIN_PCT", "0.3"))
-G4_MOMENTUM_MAX  = float(os.getenv("BN_MOMENTUM_MAX_PCT", "8.0"))
+# G3: Trend filter — coin must be going UP on 24h basis
+G3_MIN_TREND     = float(os.getenv("BN_G3_MIN_TREND", "1.0"))   # minimum +1% 24h
 
-# G5: Fusion score threshold
-G5_BUY_THRESHOLD = float(os.getenv("BN_BUY_SCORE", "60.0"))
+# G4: Sweet-spot momentum — not too weak, not an extreme pump
+G4_MIN_24H       = float(os.getenv("BN_G4_MIN", "2.0"))         # minimum +2% 24h
+G4_MAX_24H       = float(os.getenv("BN_G4_MAX", "30.0"))        # maximum +30% 24h (avoid tops)
+
+# G5: Fusion score
+G5_BUY_THRESHOLD = float(os.getenv("BN_BUY_SCORE", "40.0"))
 
 
 # ── G1: Market Data Validation ────────────────────────────────────────────────
 
 def gate1_market_data(ticker: dict) -> tuple[bool, str]:
-    """Check that we have valid, fresh market data from Binance."""
+    """Ensure valid, liquid, fresh data."""
     if not ticker:
         return False, "No ticker data"
     if ticker.get("price_usd", 0) <= 0:
         return False, "Invalid price"
-    if ticker.get("volume_24h", 0) < 1_000_000:
-        return False, f"Vol too low: ${ticker['volume_24h']/1e6:.1f}M < $1M"
+    vol = ticker.get("volume_24h", 0)
+    if vol < G1_MIN_VOLUME:
+        return False, f"Vol too low: ${vol/1e6:.1f}M < ${G1_MIN_VOLUME/1e6:.0f}M"
     age = time.time() - ticker.get("updated_at", 0)
-    if age > 30:
+    if age > G1_MAX_DATA_AGE:
         return False, f"Stale data: {age:.0f}s old"
     return True, "OK"
 
 
-# ── G2: Noise Filter ─────────────────────────────────────────────────────────
+# ── G2: Noise / Crash Filter ─────────────────────────────────────────────────
 
 def gate2_noise_filter(ticker: dict) -> tuple[bool, str]:
-    """Block extreme pumps, crashes, and illiquid coins."""
-    ch5m = ticker.get("change_5m", 0)
+    """Block crashes and extreme volatility."""
     ch24 = ticker.get("change_24h", 0)
     high = ticker.get("high_24h", 0)
-    low  = ticker.get("low_24h", 1)
+    low  = ticker.get("low_24h",  1)
 
-    if ch5m > G2_MAX_5M_SPIKE:
-        return False, f"Extreme pump: +{ch5m:.1f}% in 5m (max {G2_MAX_5M_SPIKE}%)"
     if ch24 < G2_MIN_24H:
-        return False, f"Crash: {ch24:.1f}% 24h (min {G2_MIN_24H}%)"
-    if low > 0 and (high - low) / low * 100 > 50:
-        return False, f"Extreme volatility: {(high-low)/low*100:.0f}% range"
+        return False, f"Crash: {ch24:.1f}% in 24h (min {G2_MIN_24H}%)"
+    if low > 0 and (high - low) / low * 100 > G2_MAX_VOLATILITY:
+        return False, f"Extreme volatility: {(high-low)/low*100:.0f}% H/L range"
     return True, "OK"
 
 
-# ── G3: Technical Confirmation (RSI placeholder) ──────────────────────────────
+# ── G3: Trend Confirmation ────────────────────────────────────────────────────
 
-def gate3_technical(ticker: dict) -> tuple[bool, str]:
-    """
-    RSI / MACD confirmation.
-    Phase 1: use 24h change as RSI proxy until kline REST is integrated.
-    """
-    ch24  = ticker.get("change_24h", 0)
-    spike = ticker.get("volume_spike", 1.0)
-
-    # Proxy RSI: if market is up moderately + volume spike → bullish signal
-    if ch24 < -10:
-        return False, f"Bearish 24h: {ch24:.1f}% (RSI proxy too low)"
-    if spike < 1.5:
-        return False, f"Volume spike too weak: {spike:.1f}x (min 1.5x)"
-    return True, f"OK (24h:{ch24:+.1f}% spike:{spike:.1f}x)"
+def gate3_trend(ticker: dict) -> tuple[bool, str]:
+    """Coin must be in a positive 24h trend."""
+    ch24 = ticker.get("change_24h", 0)
+    if ch24 < G3_MIN_TREND:
+        return False, f"No uptrend: {ch24:+.2f}% 24h (min +{G3_MIN_TREND}%)"
+    return True, f"Uptrend: {ch24:+.2f}% 24h"
 
 
-# ── G4: Momentum & Market Structure ──────────────────────────────────────────
+# ── G4: Momentum Sweet Spot ───────────────────────────────────────────────────
 
 def gate4_momentum(ticker: dict) -> tuple[bool, str]:
-    """Ensure positive but not extreme momentum (avoid FOMO entries)."""
-    ch5m = ticker.get("change_5m", 0)
-    ch1m = ticker.get("change_1m", 0)
+    """Coin must be gaining, but not at FOMO-top levels."""
+    ch24 = ticker.get("change_24h", 0)
 
-    # Use 24h/4.8 as proxy if no 5m history yet
-    if ch5m == 0.0:
-        ch5m = ticker.get("change_24h", 0) / 4.8
-
-    if ch5m < G4_MOMENTUM_MIN:
-        return False, f"Insufficient momentum: {ch5m:+.2f}% (min +{G4_MOMENTUM_MIN}%)"
-    if ch5m > G4_MOMENTUM_MAX:
-        return False, f"Momentum too extreme: {ch5m:+.2f}% (max {G4_MOMENTUM_MAX}%)"
-    return True, f"OK (5m:{ch5m:+.2f}% 1m:{ch1m:+.2f}%)"
+    if ch24 < G4_MIN_24H:
+        return False, f"Momentum too weak: {ch24:+.2f}% (min +{G4_MIN_24H}%)"
+    if ch24 > G4_MAX_24H:
+        return False, f"Extreme pump — avoid FOMO top: {ch24:+.2f}% (max +{G4_MAX_24H}%)"
+    return True, f"Momentum OK: {ch24:+.2f}% 24h"
 
 
-# ── G5: Binance Fusion Score ─────────────────────────────────────────────────
+# ── G5: Fusion Score (0–100) ──────────────────────────────────────────────────
 
 def gate5_fusion_score(ticker: dict) -> tuple[bool, str, float]:
-    """Calculate composite score and decide BUY/HOLD/SKIP."""
-    ch5m  = ticker.get("change_5m", 0) or ticker.get("change_24h", 0) / 4.8
-    ch24  = ticker.get("change_24h", 0)
-    spike = ticker.get("volume_spike", 1.0)
-    vol   = ticker.get("volume_24h", 0)
+    """
+    Score based on data we ACTUALLY have from the mini-ticker:
+      • 24h momentum strength   (50%)
+      • Volume tier             (50%)
+    Threshold: G5_BUY_THRESHOLD (default 40)
+    """
+    ch24 = ticker.get("change_24h", 0)
+    vol  = ticker.get("volume_24h",  0)
 
-    # Momentum component (30%)
-    momentum_score = min(max((ch5m - G4_MOMENTUM_MIN) / G4_MOMENTUM_MAX * 100, 0), 100)
+    # ── Momentum score (0–50 pts) ─────────────────────────────────────────
+    # Map +2% → 0 pts, +15% → 50 pts (sweet spot), diminishing above
+    momentum_score = min(max((ch24 - G4_MIN_24H) / (G4_MAX_24H - G4_MIN_24H) * 50, 0), 50)
 
-    # Volume spike component (30%)
-    spike_score = min((spike - 1.0) / 4.0 * 100, 100)
+    # ── Volume tier score (0–50 pts) ─────────────────────────────────────
+    if   vol >= 500_000_000: vol_score = 50   # BTC/ETH tier
+    elif vol >= 100_000_000: vol_score = 45
+    elif vol >= 50_000_000:  vol_score = 38
+    elif vol >= 20_000_000:  vol_score = 30
+    elif vol >= 10_000_000:  vol_score = 22
+    elif vol >= 5_000_000:   vol_score = 15
+    else:                    vol_score = 5
 
-    # 24h trend component (20%)
-    trend_score = min(max((ch24 + 20) / 40 * 100, 0), 100)
+    score = momentum_score + vol_score
 
-    # Volume tier component (20%)
-    if   vol >= 100_000_000: vol_score = 100
-    elif vol >= 50_000_000:  vol_score = 80
-    elif vol >= 10_000_000:  vol_score = 60
-    elif vol >= 5_000_000:   vol_score = 40
-    else:                    vol_score = 20
+    if   score >= 65: confidence = "HIGH"
+    elif score >= 50: confidence = "MEDIUM"
+    elif score >= G5_BUY_THRESHOLD: confidence = "LOW"
+    else:             confidence = "SKIP"
 
-    score = (
-        momentum_score * 0.30 +
-        spike_score    * 0.30 +
-        trend_score    * 0.20 +
-        vol_score      * 0.20
-    )
-
-    if   score >= 70: decision = "BUY",    "HIGH"
-    elif score >= 55: decision = "BUY",    "MEDIUM"
-    elif score >= 40: decision = "HOLD",   "LOW"
-    else:             decision = "SKIP",   "LOW"
-
-    action, confidence = decision
-    return action == "BUY" and score >= G5_BUY_THRESHOLD, f"{action} score={score:.1f} conf={confidence}", score
+    buy = score >= G5_BUY_THRESHOLD
+    action = "BUY" if buy else "SKIP"
+    return buy, f"{action} score={score:.1f} conf={confidence}", score
 
 
-# ── Evaluate single candidate ─────────────────────────────────────────────────
+# ── Evaluate single candidate through all gates ───────────────────────────────
 
 async def evaluate_candidate(ticker: dict, positions: dict) -> bool:
     symbol = ticker.get("symbol", "?")
@@ -166,7 +162,7 @@ async def evaluate_candidate(ticker: dict, positions: dict) -> bool:
     gates.append("G2")
 
     # G3
-    ok, reason = gate3_technical(ticker)
+    ok, reason = gate3_trend(ticker)
     if not ok:
         logger.info(f"[{symbol}] G3 FAIL: {reason}")
         return False
@@ -186,42 +182,93 @@ async def evaluate_candidate(ticker: dict, positions: dict) -> bool:
         return False
     gates.append("G5")
 
-    # G6: Position limits
+    # G6: Position limits + duplicate check
+    if symbol in positions:
+        logger.debug(f"[{symbol}] G6 FAIL: already in portfolio")
+        return False
     if len(positions) >= MAX_POSITIONS:
         logger.warning(f"[{symbol}] G6 FAIL: max {MAX_POSITIONS} positions reached")
         return False
     gates.append("G6")
 
-    # ── BUY ──────────────────────────────────────────────────────────────────
-    if DRY_RUN:
-        logger.success(
-            f"[{symbol}] ✅ DRY-RUN BUY @ ${price:.6f} | "
-            f"Score:{score:.1f} | Gates:{'+'.join(gates)} | "
-            f"Size:${POSITION_SIZE} USDT"
+    # ── BUY ───────────────────────────────────────────────────────────────────
+    mode    = "DRY-RUN" if DRY_RUN else "LIVE"
+    ch24    = ticker.get("change_24h", 0)
+    vol_m   = ticker.get("volume_24h", 0) / 1e6
+
+    logger.success(
+        f"[{symbol}] ✅ {mode} BUY @ ${price:.6f} | "
+        f"24h:{ch24:+.2f}% | Vol:${vol_m:.1f}M | "
+        f"Score:{score:.1f} | Gates:{'+'.join(gates)}"
+    )
+
+    pos_data = {
+        "symbol":      symbol,
+        "entry_price": price,
+        "size_usdt":   POSITION_SIZE,
+        "opened_at":   time.time(),
+        "change_24h":  ch24,
+        "score":       round(score, 1),
+    }
+    positions[symbol] = pos_data
+
+    # Save to positions.json (Positions Tab)
+    try:
+        with open("positions.json", "w") as f:
+            json.dump(positions, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save positions.json: {e}")
+
+    # Save to SQLite (History Tab)
+    try:
+        conn = sqlite3.connect("memecoin_bot.db")
+        conn.execute(
+            """INSERT INTO trades
+               (token_address, symbol, entry_price, position_size, score, decision,
+                buy_amount_usd, funnel_stage, gates_passed, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, symbol, price, POSITION_SIZE, score, f"BUY ({mode})",
+             POSITION_SIZE, "G6_EXECUTION", "+".join(gates),
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         )
-        positions[symbol] = {
-            "symbol":      symbol,
-            "entry_price": price,
-            "size_usdt":   POSITION_SIZE,
-            "opened_at":   time.time(),
-        }
-        return True
-    else:
-        logger.info(f"[{symbol}] LIVE BUY (not yet implemented — enable DRY_RUN)")
-        return False
+        conn.execute(
+            """INSERT INTO bot_events
+               (event_type, symbol, address, buy_amount_usd, price_usd, stage, message, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("BUY", symbol, symbol, POSITION_SIZE, price,
+             "G6_EXECUTION",
+             f"24h:{ch24:+.2f}% Score:{score:.1f}",
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        conn.commit()
+        conn.close()
+        logger.debug(f"[{symbol}] Saved to DB ✓")
+    except Exception as e:
+        logger.error(f"Failed to save to database: {e}")
+
+    return True
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 async def main_loop() -> None:
     logger.info("=" * 65)
-    logger.info("Binance Crypto Bot — Multi-Gate Discovery")
-    logger.info(f"DRY_RUN: {DRY_RUN} | Position: ${POSITION_SIZE} USDT")
-    logger.info(f"Max Positions: {MAX_POSITIONS} | SL: {STOP_LOSS_PCT}% | TP: {TAKE_PROFIT_PCT}%")
+    logger.info("Binance Crypto Bot — Multi-Gate Discovery (G1–G6)")
+    logger.info(f"DRY_RUN: {DRY_RUN} | Size: ${POSITION_SIZE} USDT | Max: {MAX_POSITIONS} pos")
+    logger.info(f"G4: +{G4_MIN_24H}% to +{G4_MAX_24H}% 24h | G5 threshold: {G5_BUY_THRESHOLD} pts")
     logger.info("=" * 65)
 
-    stream    = BinanceStreamAdapter()
+    stream = BinanceStreamAdapter()
+
+    # Load existing positions
     positions = {}
+    if os.path.exists("positions.json"):
+        try:
+            with open("positions.json") as f:
+                positions = json.load(f)
+            logger.info(f"Loaded {len(positions)} existing positions from positions.json")
+        except Exception:
+            pass
 
     asyncio.create_task(stream.start())
     asyncio.create_task(stream.cleanup_loop())
@@ -236,8 +283,8 @@ async def main_loop() -> None:
             break
 
         scan += 1
-        st   = stream.status()
-        cands = stream.get_candidates(limit=20)
+        st    = stream.status()
+        cands = stream.get_candidates(limit=30)
 
         logger.info(
             f"── Scan #{scan} | WS: {'OK' if st['connected'] else 'DOWN'} | "
@@ -251,6 +298,9 @@ async def main_loop() -> None:
             if ticker["symbol"] in positions:
                 continue
             bought += await evaluate_candidate(ticker, positions)
+
+        if bought:
+            logger.success(f"── Scan #{scan} → {bought} new position(s) opened ──")
 
         logger.info(
             f"── Scan #{scan} done | Bought: {bought} | "
