@@ -63,11 +63,43 @@ METRICS_CACHE_TTL = float(os.getenv("HL_METRICS_CACHE_TTL", "300"))
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 LEADERBOARD_WINDOWS = ("day", "week", "month", "allTime")
 
+# Seconds-per-window — used to restrict `userFills` metrics (win-rate, trades, hold)
+# to the same window the user picked for PnL/Volume. `None` means "all HL keeps".
+LEADERBOARD_WINDOW_SEC: dict[str, Optional[float]] = {
+    "day":     86400.0,
+    "week":    604800.0,
+    "month":   2592000.0,
+    "allTime": None,
+}
+
 # Minimum spacing between HL API calls to avoid 429 rate limiting
 MIN_REQUEST_INTERVAL = float(os.getenv("HL_MIN_REQUEST_INTERVAL", "2.0"))
 
+# Public API health, updated by _hl_request — surfaced on the dashboard so users
+# can tell "still loading" from "rate-limited" from "network down".
+_API_HEALTH_LOCK = threading.Lock()
+_api_health_state: str = "ok"  # ok | rate_limited | unreachable
+
+
+def _set_api_health(state: str) -> None:
+    global _api_health_state
+    with _API_HEALTH_LOCK:
+        _api_health_state = state
+
+
+def get_api_health() -> str:
+    with _API_HEALTH_LOCK:
+        return _api_health_state
+
 # Where manually activated (dashboard) traders are persisted across restarts
 ACTIVE_WALLETS_FILE = os.getenv("HL_ACTIVE_WALLETS_FILE", "hl_active_traders.json")
+
+# Where the currently focused (deep-dive) wallet is persisted across restarts
+FOCUS_WALLET_FILE = os.getenv("HL_FOCUS_WALLET_FILE", "hl_focus_wallet.json")
+
+# Per-wallet copy-size overrides (USD) — persisted across restarts. When absent,
+# the pipeline falls back to BINANCE_POSITION_SIZE_USDT.
+COPY_SIZES_FILE = os.getenv("HL_COPY_SIZES_FILE", "hl_copy_sizes.json")
 
 _UNSUPPORTED_COINS = {"PURR", "HFUN", "JEFF"}
 
@@ -94,14 +126,19 @@ def _hl_request(method: str, url: str, **kwargs) -> Optional[requests.Response]:
             resp = requests.request(method, url, **kwargs)
         except requests.RequestException as e:
             logger.debug(f"[HL-COPY] Request error: {e}")
+            _set_api_health("unreachable")
             return None
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", backoff))
             logger.warning(f"[HL-COPY] 429 rate limited — backing off {retry_after:.1f}s")
+            _set_api_health("rate_limited")
             time.sleep(retry_after)
             backoff = min(backoff * 2, 10.0)
             continue
+        if resp.ok:
+            _set_api_health("ok")
         return resp
+    _set_api_health("rate_limited")
     return None
 
 
@@ -190,14 +227,26 @@ class HyperliquidCopyTrader:
         self._wallets_lock = threading.Lock()
         # Wallets manually activated via the dashboard, persisted across restarts
         self._manual_active: set[str] = self._load_active_wallets()
-        # Dynamic trader list (env manual + dashboard-activated + auto-discovered)
+        # Wallets tracked purely for observation (Focus tab). WS+poll, but no copy-signals.
+        self._observed_only: set[str] = set()
+        # Currently focused wallet — persisted across restarts and page reloads
+        self._focus_wallet: Optional[str] = self._load_focus_wallet()
+        # Per-wallet copy-size override in USD ({} means use global default)
+        self._copy_sizes: dict[str, float] = self._load_copy_sizes()
+        # Dynamic trader list (env manual + dashboard-activated + focus + auto-discovered)
         self._wallets: list[str] = list(dict.fromkeys(MANUAL_WALLETS + list(self._manual_active)))
+        if self._focus_wallet and self._focus_wallet not in self._wallets:
+            self._wallets.append(self._focus_wallet)
+            self._observed_only.add(self._focus_wallet)
         self._last_scan = 0.0
         # Runtime-adjustable settings (dashboard "Einstellungen" tab), default from env
         self._poll_interval = POLL_INTERVAL
         self._min_copy_size_usd = MIN_COPY_SIZE_USD
-        # wallet -> (fetched_at, TraderMetrics)
-        self._metrics_cache: dict[str, tuple[float, TraderMetrics]] = {}
+        # (wallet, since_ts) -> (fetched_at, TraderMetrics) — since_ts=None means lifetime
+        self._metrics_cache: dict[tuple[str, Optional[float]], tuple[float, TraderMetrics]] = {}
+        # wallet -> (fetched_at, raw fills) — shared across windows to avoid re-hitting the
+        # heaviest HL endpoint (Focus tab computes 4 windows from the same fetch)
+        self._fills_cache: dict[str, tuple[float, list[dict]]] = {}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -252,6 +301,8 @@ class HyperliquidCopyTrader:
             return False
         with self._wallets_lock:
             self._manual_active.add(wallet)
+            # Copy-active overrides observation-only bookkeeping
+            self._observed_only.discard(wallet)
             is_new = wallet not in self._wallets
             if is_new:
                 self._wallets.append(wallet)
@@ -263,9 +314,16 @@ class HyperliquidCopyTrader:
         return is_new
 
     def deactivate_wallet(self, wallet: str) -> None:
-        """Remove a manually activated trader from tracking."""
+        """Remove a manually activated trader from tracking.
+
+        A wallet that is also the current Focus stays tracked as observation-only
+        (no copy signals), so the Focus tab keeps working after copy is disabled.
+        """
         with self._wallets_lock:
             self._manual_active.discard(wallet)
+            if wallet == self._focus_wallet:
+                self._observed_only.add(wallet)
+                return
             if wallet in self._wallets and wallet not in MANUAL_WALLETS:
                 self._wallets.remove(wallet)
         self._positions.pop(wallet, None)
@@ -280,6 +338,98 @@ class HyperliquidCopyTrader:
                 return set(data) if isinstance(data, list) else set()
         except (OSError, json.JSONDecodeError):
             return set()
+
+    @staticmethod
+    def _load_focus_wallet() -> Optional[str]:
+        try:
+            with open(FOCUS_WALLET_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+                wallet = data.get("wallet") if isinstance(data, dict) else None
+                if isinstance(wallet, str) and wallet.strip():
+                    return wallet.strip()
+                return None
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def _save_focus_wallet(self) -> None:
+        try:
+            with open(FOCUS_WALLET_FILE, "w", encoding="utf-8") as f:
+                json.dump({"wallet": self._focus_wallet or ""}, f, indent=2)
+        except OSError as e:
+            logger.error(f"[HL-COPY] Failed to save focus wallet: {e}")
+
+    def get_focus_wallet(self) -> Optional[str]:
+        return self._focus_wallet
+
+    def set_focus_wallet(self, wallet: str) -> None:
+        """Persist a wallet as the Focus target — tracked live (WS + poll) but NOT copy-signaled.
+
+        Setting a new focus removes the previous one from tracking if it was
+        observation-only (i.e. not also manually copy-activated or env-pinned).
+        """
+        wallet = wallet.strip()
+        if not wallet:
+            return
+        prev = self._focus_wallet
+        with self._wallets_lock:
+            if prev and prev != wallet and prev in self._observed_only:
+                self._observed_only.discard(prev)
+                if prev in self._wallets and prev not in MANUAL_WALLETS and prev not in self._manual_active:
+                    self._wallets.remove(prev)
+                    self._positions.pop(prev, None)
+            self._focus_wallet = wallet
+            if wallet not in self._wallets:
+                self._wallets.append(wallet)
+            if wallet not in MANUAL_WALLETS and wallet not in self._manual_active:
+                self._observed_only.add(wallet)
+        self._save_focus_wallet()
+
+    def clear_focus_wallet(self) -> None:
+        prev = self._focus_wallet
+        with self._wallets_lock:
+            self._focus_wallet = None
+            if prev and prev in self._observed_only:
+                self._observed_only.discard(prev)
+                if prev in self._wallets and prev not in MANUAL_WALLETS and prev not in self._manual_active:
+                    self._wallets.remove(prev)
+                    self._positions.pop(prev, None)
+        self._save_focus_wallet()
+
+    def _should_emit_signals_for(self, wallet: str) -> bool:
+        return wallet not in self._observed_only
+
+    @staticmethod
+    def _load_copy_sizes() -> dict[str, float]:
+        try:
+            with open(COPY_SIZES_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {str(k): float(v) for k, v in data.items() if float(v) > 0}
+                return {}
+        except (OSError, json.JSONDecodeError, ValueError):
+            return {}
+
+    def _save_copy_sizes(self) -> None:
+        try:
+            with open(COPY_SIZES_FILE, "w", encoding="utf-8") as f:
+                json.dump(self._copy_sizes, f, indent=2, sort_keys=True)
+        except OSError as e:
+            logger.error(f"[HL-COPY] Failed to save copy sizes: {e}")
+
+    def get_copy_size(self, wallet: str) -> Optional[float]:
+        """Per-wallet position size in USD, or None to fall back to the pipeline default."""
+        return self._copy_sizes.get(wallet.strip())
+
+    def set_copy_size(self, wallet: str, size_usd: float) -> None:
+        wallet = wallet.strip()
+        if not wallet or size_usd <= 0:
+            return
+        self._copy_sizes[wallet] = float(size_usd)
+        self._save_copy_sizes()
+
+    def clear_copy_size(self, wallet: str) -> None:
+        self._copy_sizes.pop(wallet.strip(), None)
+        self._save_copy_sizes()
 
     def _save_active_wallets(self) -> None:
         try:
@@ -302,10 +452,16 @@ class HyperliquidCopyTrader:
         The HL API is rate-limited, so each candidate's fills lookup is throttled
         (~2s apart) — `progress_cb(done, total, wallet)` lets callers show progress
         instead of a long silent block.
+
+        Metrics (trades/win-rate/hold) are restricted to the SAME window that PnL/
+        Volume come from — so a "1 Tag" search yields 1-day trades, not lifetime.
         """
         rows = self._fetch_leaderboard()
         if not rows:
             return []
+
+        window_sec = LEADERBOARD_WINDOW_SEC.get(window)
+        since_ts = time.time() - window_sec if window_sec is not None else None
 
         ranked: list[tuple[str, float, dict]] = []
         for row in rows:
@@ -327,7 +483,7 @@ class HyperliquidCopyTrader:
         for i, (wallet, _, info) in enumerate(candidates, 1):
             if progress_cb:
                 progress_cb(i, len(candidates), wallet)
-            metrics = self._compute_trader_metrics(wallet)
+            metrics = self._compute_trader_metrics(wallet, since_ts=since_ts)
             if metrics is None:
                 continue
             if metrics.trades < min_trades:
@@ -337,16 +493,74 @@ class HyperliquidCopyTrader:
             if max_avg_hold_sec is not None and metrics.avg_hold_sec > max_avg_hold_sec:
                 continue
             results.append({
-                "wallet": wallet,
-                "account_value": info["account_value"],
-                "window_pnl": info["pnl"],
-                "window_volume": info["vlm"],
-                "trades": metrics.trades,
-                "win_rate": metrics.win_rate,
-                "avg_hold_sec": metrics.avg_hold_sec,
-                "last_active_age": metrics.last_active_age,
+                "wallet":           wallet,
+                "account_value":    info["account_value"],
+                "window_pnl":       info["pnl"],
+                "window_volume":    info["vlm"],
+                "trades":           metrics.trades,
+                "win_rate":         metrics.win_rate,
+                "avg_hold_sec":     metrics.avg_hold_sec,
+                "last_active_age":  metrics.last_active_age,
+                "metrics_window":   window,
+                "metrics_source":   "hl_rest",
             })
         return results
+
+    def get_trader_focus(self, wallet: str) -> Optional[dict]:
+        """Deep-dive snapshot of one trader for the dashboard Focus tab.
+
+        Returns metrics across all 4 HL windows (1d/7d/30d/all), current
+        positions (fetched on-demand if not already tracked) and recent fills.
+        All windows share one `userFills` fetch via the fills cache, so this
+        is cheaper than calling `list_leaderboard` per window.
+        """
+        wallet = wallet.strip()
+        if not wallet:
+            return None
+
+        metrics_by_window: dict[str, Optional[TraderMetrics]] = {}
+        for w in LEADERBOARD_WINDOWS:
+            w_sec = LEADERBOARD_WINDOW_SEC.get(w)
+            since = time.time() - w_sec if w_sec is not None else None
+            metrics_by_window[w] = self._compute_trader_metrics(wallet, since_ts=since)
+
+        positions = dict(self._positions.get(wallet, {}))
+        if not positions:
+            data = self._api_clearinghouse_state(wallet)
+            if data:
+                for ap in data.get("assetPositions", []):
+                    pos = ap.get("position", {})
+                    coin = pos.get("coin", "")
+                    size = float(pos.get("sizeDecimal", pos.get("size", "0")) or "0")
+                    if abs(size) < 1e-12:
+                        continue
+                    entry = float(pos.get("entryPx", "0") or "0")
+                    lev = pos.get("leverage", {})
+                    lev_val = float(lev.get("value", 1) if isinstance(lev, dict) else (lev or 1))
+                    upnl = float(pos.get("unrealizedPnl", "0") or "0")
+                    value_usd = float(pos.get("positionValue", "0") or "0")
+                    cost = abs(size) * entry
+                    pnl_pct = (upnl / cost * 100) if cost > 0 else 0.0
+                    positions[coin] = {
+                        "coin": coin, "size": size, "entry_px": entry,
+                        "leverage": lev_val, "pnl_pct": pnl_pct,
+                        "value_usd": value_usd, "unrealized_pnl": upnl,
+                    }
+
+        stats = self._trader_stats.get(wallet) or self._api_trader_stats(wallet)
+        recent_fills = self._fetch_user_fills(wallet) or []
+        recent_fills = sorted(recent_fills, key=lambda f: f.get("time", 0), reverse=True)[:25]
+
+        return {
+            "wallet":            wallet,
+            "account_value":     stats.total_pnl if stats else 0.0,
+            "total_fills":       stats.total_trades if stats else 0,
+            "metrics_by_window": metrics_by_window,
+            "positions":         positions,
+            "recent_fills":      recent_fills,
+            "is_tracked":        wallet in self._wallets,
+            "is_active":         wallet in self._manual_active,
+        }
 
     def status(self) -> dict:
         total_positions = sum(len(p) for p in self._positions.values())
@@ -362,6 +576,7 @@ class HyperliquidCopyTrader:
             "auto_discover":   AUTO_DISCOVER,
             "last_scan_age":   round(time.time() - self._last_scan, 1) if self._last_scan else None,
             "next_scan_in":    round(RESCAN_INTERVAL_SEC - (time.time() - self._last_scan), 1) if self._last_scan else None,
+            "api_health":      get_api_health(),
         }
 
     # ── Startup ───────────────────────────────────────────────────────────────
@@ -466,8 +681,12 @@ class HyperliquidCopyTrader:
 
 
     def _diff_positions(self, wallet: str, new_pos: dict[str, dict]) -> None:
+        # Focus-only wallets get the SAME live console logs, but no copy signal
+        # goes on the queue (user is watching, not copying).
+        emit_signals = self._should_emit_signals_for(wallet)
         old_pos = self._positions.get(wallet, {})
         short = f"{wallet[:6]}...{wallet[-4:]}" if len(wallet) > 12 else wallet
+        tag = "COPY" if emit_signals else "WATCH"
 
         for coin, pos in new_pos.items():
             if coin in _UNSUPPORTED_COINS:
@@ -478,27 +697,30 @@ class HyperliquidCopyTrader:
             value = pos["value_usd"]
 
             if old is None and size > 0 and value >= self._min_copy_size_usd:
-                self._emit(CopySignal(
-                    trader=wallet, coin=coin, symbol=symbol,
-                    signal="COPY_OPEN_LONG", size_usd=value,
-                    entry_price=pos["entry_px"], leverage=pos["leverage"],
-                    pnl_pct=pos["pnl_pct"],
-                ))
+                if emit_signals:
+                    self._emit(CopySignal(
+                        trader=wallet, coin=coin, symbol=symbol,
+                        signal="COPY_OPEN_LONG", size_usd=value,
+                        entry_price=pos["entry_px"], leverage=pos["leverage"],
+                        pnl_pct=pos["pnl_pct"],
+                    ))
                 logger.info(
-                    f"[HL-COPY] 📈 OPEN LONG | {short} | {coin} | "
-                    f"${value:,.0f} @ ${pos['entry_px']:.2f} | "
+                    f"[HL-{tag}] 📈 OPEN LONG | {short} | {coin} | "
+                    f"${value:,.0f} @ ${pos['entry_px']:.4f} | "
                     f"{pos['leverage']:.0f}x"
                 )
             elif old is None and size < 0:
-                self._emit(CopySignal(
-                    trader=wallet, coin=coin, symbol=symbol,
-                    signal="COPY_OPEN_SHORT", size_usd=value,
-                    entry_price=pos["entry_px"], leverage=pos["leverage"],
-                    pnl_pct=pos["pnl_pct"],
-                ))
+                if emit_signals:
+                    self._emit(CopySignal(
+                        trader=wallet, coin=coin, symbol=symbol,
+                        signal="COPY_OPEN_SHORT", size_usd=value,
+                        entry_price=pos["entry_px"], leverage=pos["leverage"],
+                        pnl_pct=pos["pnl_pct"],
+                    ))
                 logger.info(
-                    f"[HL-COPY] 📉 SHORT | {short} | {coin} | "
-                    f"${value:,.0f} (info only)"
+                    f"[HL-{tag}] 📉 OPEN SHORT | {short} | {coin} | "
+                    f"${value:,.0f} @ ${pos['entry_px']:.4f} | "
+                    f"{pos['leverage']:.0f}x (info only)"
                 )
             elif old is not None and size > 0 and old["size"] > 0:
                 if old["size"] != 0:
@@ -506,25 +728,27 @@ class HyperliquidCopyTrader:
                 else:
                     change = 100.0
                 if size > old["size"] * 1.05:
-                    self._emit(CopySignal(
-                        trader=wallet, coin=coin, symbol=symbol,
-                        signal="COPY_INCREASE", size_usd=value,
-                        entry_price=pos["entry_px"],
-                        leverage=pos["leverage"], pnl_pct=pos["pnl_pct"],
-                    ))
+                    if emit_signals:
+                        self._emit(CopySignal(
+                            trader=wallet, coin=coin, symbol=symbol,
+                            signal="COPY_INCREASE", size_usd=value,
+                            entry_price=pos["entry_px"],
+                            leverage=pos["leverage"], pnl_pct=pos["pnl_pct"],
+                        ))
                     logger.info(
-                        f"[HL-COPY] ⬆️  INCREASE | {short} | {coin} | "
+                        f"[HL-{tag}] ⬆️  INCREASE | {short} | {coin} | "
                         f"+{change:.0f}% → ${value:,.0f}"
                     )
                 elif size < old["size"] * 0.95:
-                    self._emit(CopySignal(
-                        trader=wallet, coin=coin, symbol=symbol,
-                        signal="COPY_DECREASE", size_usd=value,
-                        entry_price=pos["entry_px"],
-                        leverage=pos["leverage"], pnl_pct=pos["pnl_pct"],
-                    ))
+                    if emit_signals:
+                        self._emit(CopySignal(
+                            trader=wallet, coin=coin, symbol=symbol,
+                            signal="COPY_DECREASE", size_usd=value,
+                            entry_price=pos["entry_px"],
+                            leverage=pos["leverage"], pnl_pct=pos["pnl_pct"],
+                        ))
                     logger.info(
-                        f"[HL-COPY] ⬇️  DECREASE | {short} | {coin} | "
+                        f"[HL-{tag}] ⬇️  DECREASE | {short} | {coin} | "
                         f"-{change:.0f}% → ${value:,.0f}"
                     )
 
@@ -533,15 +757,21 @@ class HyperliquidCopyTrader:
             if coin not in new_pos and coin not in _UNSUPPORTED_COINS:
                 symbol = hl_coin_to_binance_symbol(coin)
                 if old["size"] > 0:
-                    self._emit(CopySignal(
-                        trader=wallet, coin=coin, symbol=symbol,
-                        signal="COPY_CLOSE_LONG", size_usd=old["value_usd"],
-                        entry_price=old["entry_px"],
-                        leverage=old["leverage"], pnl_pct=old["pnl_pct"],
-                    ))
+                    if emit_signals:
+                        self._emit(CopySignal(
+                            trader=wallet, coin=coin, symbol=symbol,
+                            signal="COPY_CLOSE_LONG", size_usd=old["value_usd"],
+                            entry_price=old["entry_px"],
+                            leverage=old["leverage"], pnl_pct=old["pnl_pct"],
+                        ))
                     logger.info(
-                        f"[HL-COPY] 🔴 CLOSE | {short} | {coin} | "
+                        f"[HL-{tag}] 🔴 CLOSE LONG | {short} | {coin} | "
                         f"PnL: {old['pnl_pct']:+.2f}%"
+                    )
+                elif old["size"] < 0:
+                    logger.info(
+                        f"[HL-{tag}] 🔴 CLOSE SHORT | {short} | {coin} | "
+                        f"PnL: {old['pnl_pct']:+.2f}% (info only)"
                     )
 
     def _emit(self, sig: CopySignal) -> None:
@@ -606,9 +836,28 @@ class HyperliquidCopyTrader:
         data = msg.get("data", {})
         if channel == "userFills":
             user = data.get("user", "")
-            if user in self._wallets:
-                await asyncio.sleep(0.5)
-                await self._poll_trader(user, emit_signals=True)
+            if user not in self._wallets:
+                return
+            short = f"{user[:6]}...{user[-4:]}"
+            tag = "COPY" if self._should_emit_signals_for(user) else "WATCH"
+            for f in data.get("fills", []) or []:
+                try:
+                    coin = f.get("coin", "?")
+                    px = float(f.get("px", "0") or "0")
+                    sz = float(f.get("sz", "0") or "0")
+                    side = f.get("side", "")  # "B" = buy, "A" = sell
+                    direction = f.get("dir", "")
+                    closed_pnl = float(f.get("closedPnl", "0") or "0")
+                    arrow = "🟢 BUY " if side == "B" else "🔴 SELL"
+                    logger.info(
+                        f"[HL-{tag}] {arrow} {short} | {coin} | "
+                        f"{sz:.4f} @ ${px:.4f} = ${sz * px:,.0f} | "
+                        f"{direction} | PnL: ${closed_pnl:+,.2f}"
+                    )
+                except Exception as e:
+                    logger.debug(f"[HL-{tag}] fill parse: {e}")
+            await asyncio.sleep(0.5)
+            await self._poll_trader(user, emit_signals=True)
 
     # ── Trader Stats ──────────────────────────────────────────────────────────
 
@@ -692,8 +941,12 @@ class HyperliquidCopyTrader:
         logger.info(f"[HL-COPY] Evaluating {len(candidates)} leaderboard candidate(s)...")
 
         scored: list[tuple[str, TraderMetrics]] = []
+        # Restrict metrics to a recent window so auto-discovery ranks by *current*
+        # behaviour, not lifetime — otherwise the same top wallets get re-selected
+        # every rescan regardless of how they're actually trading now.
+        discovery_since_ts = time.time() - max(ACTIVE_WITHIN_SEC * 7, 7 * 86400.0)
         for wallet, _ in candidates:
-            metrics = self._compute_trader_metrics(wallet)
+            metrics = self._compute_trader_metrics(wallet, since_ts=discovery_since_ts)
             if metrics is None:
                 continue
             if metrics.trades < MIN_TRADES:
@@ -735,16 +988,16 @@ class HyperliquidCopyTrader:
         w = perf.get(window, {})
         return float(w.get("pnl", "0") or "0"), float(w.get("vlm", "0") or "0")
 
-    def _compute_trader_metrics(self, wallet: str) -> Optional[TraderMetrics]:
-        """Derive trade count, win-rate and avg hold time from recent fills.
+    def _fetch_user_fills(self, wallet: str) -> Optional[list[dict]]:
+        """Fetch raw userFills for a wallet, cached for METRICS_CACHE_TTL.
 
-        Cached for METRICS_CACHE_TTL seconds — `userFills` is the most rate-limit-heavy
-        HL endpoint, and the same top wallets keep reappearing across searches/rescans.
+        `userFills` is the heaviest HL endpoint. The Focus tab needs the same
+        list to compute 4 windows AND to render "recent fills" — sharing this
+        cache means all of that costs one network call, not five.
         """
-        cached = self._metrics_cache.get(wallet)
+        cached = self._fills_cache.get(wallet)
         if cached and (time.time() - cached[0]) < METRICS_CACHE_TTL:
             return cached[1]
-
         try:
             resp = _hl_request(
                 "POST", HL_API_URL,
@@ -755,13 +1008,38 @@ class HyperliquidCopyTrader:
                 return None
             resp.raise_for_status()
             fills = resp.json()
-            if not isinstance(fills, list) or not fills:
+            if not isinstance(fills, list):
                 return None
         except Exception as e:
             logger.debug(f"[HL-COPY] Fills fetch failed for {wallet}: {e}")
             return None
+        self._fills_cache[wallet] = (time.time(), fills)
+        return fills
 
-        fills.sort(key=lambda f: f.get("time", 0))
+    def _compute_trader_metrics(
+        self, wallet: str, since_ts: Optional[float] = None,
+    ) -> Optional[TraderMetrics]:
+        """Derive trade count, win-rate and avg hold time from recent fills.
+
+        `since_ts` restricts fills to a wall-clock window so the resulting metrics
+        actually match the PnL/Volume window the user picked in the scanner —
+        without it, trades/win-rate/hold were previously LIFETIME numbers next to
+        windowed PnL, which produced the misleading columns in the old dashboard.
+        """
+        cache_key = (wallet, since_ts)
+        cached = self._metrics_cache.get(cache_key)
+        if cached and (time.time() - cached[0]) < METRICS_CACHE_TTL:
+            return cached[1]
+
+        fills = self._fetch_user_fills(wallet)
+        if not fills:
+            return None
+
+        fills = sorted(fills, key=lambda f: f.get("time", 0))
+        if since_ts is not None:
+            fills = [f for f in fills if float(f.get("time", 0)) / 1000.0 >= since_ts]
+        if not fills:
+            return None
 
         open_times: dict[str, float] = {}
         hold_durations: list[float] = []
@@ -798,7 +1076,7 @@ class HyperliquidCopyTrader:
             avg_hold_sec=avg_hold,
             last_active_age=last_active_age,
         )
-        self._metrics_cache[wallet] = (time.time(), metrics)
+        self._metrics_cache[cache_key] = (time.time(), metrics)
         return metrics
 
     @staticmethod

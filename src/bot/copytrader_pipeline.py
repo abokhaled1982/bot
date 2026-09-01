@@ -22,6 +22,7 @@ import os
 import sqlite3
 import time
 from datetime import datetime
+from typing import Optional
 
 from loguru import logger
 from src.adapters.binance_orderflow import BinanceOrderFlowAdapter
@@ -182,6 +183,7 @@ async def handle_copy_signal(
     sig: CopySignal,
     bn_adapter: BinanceOrderFlowAdapter,
     positions: dict,
+    hl_adapter: Optional[HyperliquidCopyTrader] = None,
 ) -> bool:
     """Process one copy signal — open or close on Binance."""
     symbol = sig.symbol
@@ -243,13 +245,18 @@ async def handle_copy_signal(
         return False
 
     # All checks passed — execute!
+    size_usdt = POSITION_SIZE
+    if hl_adapter is not None:
+        override = hl_adapter.get_copy_size(sig.trader)
+        if override and override > 0:
+            size_usdt = override
     logger.success(
         f"[COPY] ✅ COPY {sig.coin} | {sig.trader_short} | "
         f"HL: ${sig.size_usd:,.0f} {sig.leverage:.0f}x | "
-        f"BN: ${POSITION_SIZE} @ ${price:.4f}"
+        f"BN: ${size_usdt} @ ${price:.4f}"
     )
 
-    order = place_market_buy(symbol, POSITION_SIZE, price)
+    order = place_market_buy(symbol, size_usdt, price)
     if not order:
         logger.error(f"[COPY] Order failed for {symbol}")
         return False
@@ -261,19 +268,20 @@ async def handle_copy_signal(
         place_oco_sell(symbol, exec_qty, exec_price)
 
     pos_data = {
-        "symbol":      symbol,
-        "entry_price": exec_price,
-        "qty":         exec_qty,
-        "size_usdt":   POSITION_SIZE,
-        "opened_at":   time.time(),
-        "peak_price":  exec_price,
-        "order_id":    order.get("orderId", ""),
-        "dry_run":     DRY_RUN,
-        "source":      "COPY",
-        "hl_trader":   sig.trader_short,
-        "hl_coin":     sig.coin,
-        "hl_size_usd": sig.size_usd,
-        "hl_leverage": sig.leverage,
+        "symbol":         symbol,
+        "entry_price":    exec_price,
+        "qty":            exec_qty,
+        "size_usdt":      size_usdt,
+        "opened_at":      time.time(),
+        "peak_price":     exec_price,
+        "order_id":       order.get("orderId", ""),
+        "dry_run":        DRY_RUN,
+        "source":         "COPY",
+        "hl_trader":      sig.trader_short,
+        "hl_trader_full": sig.trader,
+        "hl_coin":        sig.coin,
+        "hl_size_usd":    sig.size_usd,
+        "hl_leverage":    sig.leverage,
     }
     positions[symbol] = pos_data
     _save_positions(positions)
@@ -386,4 +394,4 @@ async def main_loop() -> None:
             break
 
         sig = await hl_adapter.signal_queue.get()
-        await handle_copy_signal(sig, bn_adapter, positions)
+        await handle_copy_signal(sig, bn_adapter, positions, hl_adapter)
