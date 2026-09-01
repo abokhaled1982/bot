@@ -491,7 +491,13 @@ def _render_settings(adapter):
       <div class="detail-item"><div class="detail-label">Min. Account-Wert</div><div class="detail-value">${settings['min_account_value']:,.0f}</div></div>
       <div class="detail-item"><div class="detail-label">Max. Ø Haltezeit</div><div class="detail-value">{settings['max_avg_hold_min']:.0f} min</div></div>
       <div class="detail-item"><div class="detail-label">Signal-TTL</div><div class="detail-value">{settings['signal_ttl']:.0f}s</div></div>
+      <div class="detail-item"><div class="detail-label">Metrik-Cache</div><div class="detail-value">{settings['metrics_cache_ttl_min']:.0f} min</div></div>
     </div>
     """, unsafe_allow_html=True)
-    st.caption("Diese Werte werden über Umgebungsvariablen (.env) gesetzt und hier nur angezeigt.")
+    st.caption(
+        "Metrik-Cache: Win-Rate/Trades/Haltezeit pro Wallet werden für diese Dauer "
+        "wiederverwendet, statt bei jeder Suche erneut die teure userFills-Abfrage zu "
+        "stellen (Hauptursache für 429-Rate-Limits bei Hyperliquid). Restliche Werte "
+        "kommen aus Umgebungsvariablen (.env) und sind hier nur zur Anzeige."
+    )
 

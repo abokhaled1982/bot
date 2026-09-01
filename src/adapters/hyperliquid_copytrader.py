@@ -54,6 +54,11 @@ MAX_AVG_HOLD_SEC = float(os.getenv("HL_MAX_AVG_HOLD_SEC", "1800"))  # 30min
 ACTIVE_WITHIN_SEC = float(os.getenv("HL_ACTIVE_WITHIN_HOURS", "24")) * 3600
 # How many leaderboard candidates to fetch detailed fill stats for
 DISCOVERY_CANDIDATE_POOL = int(os.getenv("HL_DISCOVERY_POOL", "25"))
+# userFills is the heaviest HL endpoint (weight 20 + 1 per 20 returned items, up to
+# 2000 items — i.e. up to 120 weight per call against the 1200/min IP budget).
+# Caching per-wallet results avoids refetching the same top-leaderboard wallets on
+# every search/rescan, which is what actually caused repeated 429s, not the API itself.
+METRICS_CACHE_TTL = float(os.getenv("HL_METRICS_CACHE_TTL", "300"))
 
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 LEADERBOARD_WINDOWS = ("day", "week", "month", "allTime")
@@ -191,6 +196,8 @@ class HyperliquidCopyTrader:
         # Runtime-adjustable settings (dashboard "Einstellungen" tab), default from env
         self._poll_interval = POLL_INTERVAL
         self._min_copy_size_usd = MIN_COPY_SIZE_USD
+        # wallet -> (fetched_at, TraderMetrics)
+        self._metrics_cache: dict[str, tuple[float, TraderMetrics]] = {}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -229,6 +236,7 @@ class HyperliquidCopyTrader:
             "min_account_value": MIN_ACCOUNT_VALUE,
             "max_avg_hold_min": MAX_AVG_HOLD_SEC / 60,
             "signal_ttl": SIGNAL_TTL,
+            "metrics_cache_ttl_min": METRICS_CACHE_TTL / 60,
         }
 
     def set_poll_interval(self, seconds: float) -> None:
@@ -727,9 +735,16 @@ class HyperliquidCopyTrader:
         w = perf.get(window, {})
         return float(w.get("pnl", "0") or "0"), float(w.get("vlm", "0") or "0")
 
-    @staticmethod
-    def _compute_trader_metrics(wallet: str) -> Optional[TraderMetrics]:
-        """Derive trade count, win-rate and avg hold time from recent fills."""
+    def _compute_trader_metrics(self, wallet: str) -> Optional[TraderMetrics]:
+        """Derive trade count, win-rate and avg hold time from recent fills.
+
+        Cached for METRICS_CACHE_TTL seconds — `userFills` is the most rate-limit-heavy
+        HL endpoint, and the same top wallets keep reappearing across searches/rescans.
+        """
+        cached = self._metrics_cache.get(wallet)
+        if cached and (time.time() - cached[0]) < METRICS_CACHE_TTL:
+            return cached[1]
+
         try:
             resp = _hl_request(
                 "POST", HL_API_URL,
@@ -777,12 +792,14 @@ class HyperliquidCopyTrader:
         )
         last_active_age = time.time() - (fills[-1].get("time", 0) / 1000.0)
 
-        return TraderMetrics(
+        metrics = TraderMetrics(
             trades=closed_trades,
             win_rate=wins / closed_trades,
             avg_hold_sec=avg_hold,
             last_active_age=last_active_age,
         )
+        self._metrics_cache[wallet] = (time.time(), metrics)
+        return metrics
 
     @staticmethod
     def _api_trader_stats(wallet: str) -> Optional[TraderStats]:
