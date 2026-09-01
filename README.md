@@ -320,7 +320,7 @@ BINANCE_STOP_LOSS_PCT=2.0       # Immer Stop-Loss aktiv lassen
 bot-2/
 ├── main.py                          # Entry point
 ├── .env                             # Konfiguration & API Keys
-├── memecoin_bot.db                  # SQLite: Trades + Logs
+├── binance_orderflow.db              # SQLite: Trades + Logs
 ├── positions.json                   # Aktuelle offene Positionen
 │
 ├── src/

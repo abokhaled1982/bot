@@ -1,22 +1,4 @@
-"""
-Shared configuration, constants, and CSS for the dashboard.
-"""
-import os
-
-# ── Bot / Strategy Constants ─────────────────────────────────────────────────
-POSITION_SIZE_USD = float(os.getenv("TRADE_MAX_POSITION_USD", "1.0"))
-DB_PATH           = "memecoin_bot.db"
-STOP_LOSS_PCT     = float(os.getenv("STOP_LOSS_PCT",      "0.20"))
-TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT",   "0.25"))
-TRAILING_ACTIVATE = float(os.getenv("TRAILING_ACTIVATE",   "0.30"))
-TP1_PCT           = float(os.getenv("TP1_PCT",             "0.50"))
-TP2_PCT           = float(os.getenv("TP2_PCT",             "1.00"))
-TP3_PCT           = float(os.getenv("TP3_PCT",             "2.00"))
-MAX_HOLD_HOURS    = float(os.getenv("MAX_HOLD_HOURS",      "24"))
-WALLET_ADDRESS    = os.getenv(
-    "SOLANA_WALLET_ADDRESS",
-    "4jCowukxH9AR8Qxa3WseRiWcA1NzMMFprhgftat4yVBt",
-)
+"""Shared presentation constants for the Binance Orderbook dashboard."""
 
 # ── Accent palette ───────────────────────────────────────────────────────────
 C_BG        = "#06080d"

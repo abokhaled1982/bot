@@ -153,7 +153,7 @@ async def evaluate_candidate(
 
     # DB logging
     try:
-        conn = sqlite3.connect("memecoin_bot.db")
+        conn = sqlite3.connect("binance_orderflow.db")
         conn.execute(
             """INSERT INTO trades
                (token_address, symbol, entry_price, position_size, score, decision,

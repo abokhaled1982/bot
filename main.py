@@ -9,7 +9,7 @@ from loguru import logger
 
 load_dotenv()
 
-DB_PATH = "memecoin_bot.db"
+DB_PATH = "binance_orderflow.db"
 
 
 def _init_db() -> None:
