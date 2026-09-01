@@ -1,4 +1,7 @@
-"""Memecoin Trading Bot — entry point."""
+"""Trading Bot — entry point.
+
+Copies top Hyperliquid traders → executes on Binance Spot.
+"""
 import asyncio
 import os
 import sqlite3
@@ -63,7 +66,9 @@ async def _main() -> None:
         level="INFO", enqueue=True,
     )
 
-    from src.bot.orderflow_pipeline import main_loop
+    logger.info("🔄 Starting COPY-TRADER mode (Hyperliquid → Binance)")
+    from src.bot.copytrader_pipeline import main_loop
+
     await main_loop()
 
 

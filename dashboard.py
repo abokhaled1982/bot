@@ -1,19 +1,18 @@
 """
-Binance Trading Terminal — entry point.
+Hyperliquid Copy-Trader Dashboard — entry point.
 All tab logic lives in dashboard/tabs/*.py
-All data fetching lives in dashboard/db.py
 """
 import streamlit as st
 
 from dashboard.config import DASHBOARD_CSS
-from dashboard.tabs import render_live_market
+from dashboard.tabs import render_copytrader
 
 st.set_page_config(
-	page_title="Binance Orderflow Simulator",
+	page_title="Hyperliquid Copy-Trader",
 	layout="wide",
-	page_icon="B",
+	page_icon="🔄",
 	initial_sidebar_state="collapsed",
 )
 st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
 
-render_live_market()
+render_copytrader()
