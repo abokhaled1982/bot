@@ -80,6 +80,10 @@ class BinanceOrderFlowAdapter:
         self._buy_vol:  dict[str, deque] = defaultdict(lambda: deque(maxlen=300))
         self._sell_vol: dict[str, deque] = defaultdict(lambda: deque(maxlen=300))
 
+        # Rolling trade prices and book imbalance history for short-term scalping metrics
+        self._trade_prices: dict[str, deque] = defaultdict(lambda: deque(maxlen=2000))
+        self._book_ratios:  dict[str, deque] = defaultdict(lambda: deque(maxlen=600))
+
         # Track subscribed pairs
         self._subscribed_pairs: list[str] = []
 
@@ -100,6 +104,39 @@ class BinanceOrderFlowAdapter:
 
     def get_book(self, symbol: str) -> Optional[dict]:
         return self._books.get(symbol)
+
+    def get_flow_metrics(self, symbol: str, window_sec: float = 30.0) -> dict:
+        """Short-term order flow state used by the scalping gates."""
+        now = time.time()
+        cutoff = now - window_sec
+
+        prices = [(ts, price) for ts, price in self._trade_prices.get(symbol, ()) if ts >= cutoff]
+        momentum_pct = 0.0
+        if len(prices) >= 2 and prices[0][1] > 0:
+            momentum_pct = (prices[-1][1] / prices[0][1] - 1) * 100
+
+        buy_usd = sum(value for ts, value in self._buy_vol.get(symbol, ()) if ts >= cutoff)
+        sell_usd = sum(value for ts, value in self._sell_vol.get(symbol, ()) if ts >= cutoff)
+        flow_ratio = buy_usd / sell_usd if sell_usd > 0 else (float("inf") if buy_usd > 0 else 0.0)
+
+        ratios = [ratio for ts, ratio in self._book_ratios.get(symbol, ()) if ts >= cutoff]
+        persistence = (
+            sum(1 for ratio in ratios if ratio >= IMBALANCE_RATIO) / len(ratios) if ratios else 0.0
+        )
+
+        book = self._books.get(symbol, {})
+        return {
+            "momentum_pct":   momentum_pct,
+            "trade_count":    len(prices),
+            "buy_usd":        buy_usd,
+            "sell_usd":       sell_usd,
+            "flow_ratio":     flow_ratio,
+            "book_persistence": persistence,
+            "book_samples":   len(ratios),
+            "spread_bps":     book.get("spread_bps", float("inf")),
+            "bid_vol":        book.get("bid_vol", 0.0),
+            "book_age_sec":   now - book.get("updated_at", 0) if book else float("inf"),
+        }
 
     def get_top_pairs(self, n: int = 20) -> list[str]:
         """Return top-N pairs by 24h volume."""
@@ -268,6 +305,8 @@ class BinanceOrderFlowAdapter:
         else:
             self._buy_vol[sym].append(entry)
 
+        self._trade_prices[sym].append((now, price))
+
         # Whale detection
         if value_usd >= WHALE_THRESHOLD:
             signal_type = "WHALE_SELL" if is_sell else "WHALE_BUY"
@@ -308,16 +347,25 @@ class BinanceOrderFlowAdapter:
         bid_vol = sum(float(b[0]) * float(b[1]) for b in bids)  # in USDT
         ask_vol = sum(float(a[0]) * float(a[1]) for a in asks)
 
+        best_bid = float(bids[0][0])
+        best_ask = float(asks[0][0])
+        mid = (best_bid + best_ask) / 2
+        spread_bps = ((best_ask - best_bid) / mid * 10_000) if mid > 0 else float("inf")
+
+        now = time.time()
         self._books[sym] = {
             "bids": bids, "asks": asks,
             "bid_vol": bid_vol, "ask_vol": ask_vol,
-            "updated_at": time.time(),
+            "best_bid": best_bid, "best_ask": best_ask,
+            "spread_bps": spread_bps,
+            "updated_at": now,
         }
 
         if ask_vol <= 0:
             return
 
         ratio = bid_vol / ask_vol
+        self._book_ratios[sym].append((now, ratio))
 
         if ratio >= IMBALANCE_RATIO:
             sig = OrderFlowSignal(

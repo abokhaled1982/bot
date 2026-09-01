@@ -1,40 +1,44 @@
-# 🤖 Binance Order Flow Trading Bot
+# Binance Orderbook Trading Bot
 
-> **Status:** Paper Trading (DRY_RUN=True) | **Architektur:** Event-Driven, <100ms Reaktionszeit
+> **Status:** Standardmaessig Paper Trading (`DRY_RUN=True`). Oeffentliche Binance-Spot-Marktdaten werden in Echtzeit verarbeitet; Orders gehen nur bei deaktiviertem Paper-Modus an Binance.
 
 ---
 
 ## 📋 Inhaltsverzeichnis
 
-1. [Strategie-Übersicht](#1-strategie-übersicht)
-2. [Datenbasis — 3 WebSocket Streams](#2-datenbasis--3-websocket-streams)
-3. [Gate-System (G1–G5)](#3-gate-system-g1g5)
-4. [Event-Driven Architektur](#4-event-driven-architektur)
-5. [Order-Ausführung](#5-order-ausführung)
-6. [Konfiguration (.env)](#6-konfiguration-env)
+1. [Strategie-Uebersicht](#1-strategie-uebersicht)
+2. [Marktueberwachung](#2-marktueberwachung)
+3. [Gate-System](#3-gate-system-g1g5)
+4. [Kauf und Verkauf](#4-kauf-und-verkauf)
+5. [Vor- und Nachteile](#5-vor--und-nachteile)
+6. [Konfiguration](#6-konfiguration-env)
 7. [Starten](#7-starten)
-8. [Von Paper zu Live](#8-von-paper-zu-live)
+8. [Paper- und Live-Modus](#8-paper--und-live-modus)
 9. [Datei-Struktur](#9-datei-struktur)
 
 ---
 
-## 1. Strategie-Übersicht
+## 1. Strategie-Uebersicht
 
 ### Was ist Order Flow Trading?
 
-Professionelle Trader beobachten nicht nur den Preis, sondern **wer kauft, wie viel und wie aggressiv**. Wenn ein institutioneller Akteur einen großen Market-Buy platziert, bewegt das den Markt. Unser Bot erkennt diese Bewegungen innerhalb von Millisekunden und springt mit auf.
+Der Bot sucht bei liquiden Binance-Spot-Paaren nach kurzfristigem Kaufdruck. Er kombiniert einen grossen aggressiven Kauf mit einem unausgeglichenen Orderbook und einem nicht-negativen 24h-Trend. Das ist ein regelbasiertes Long-Setup, keine Prognose und keine Renditegarantie.
 
 ### Das Kernprinzip
 
 ```
-Bedingung 1: Ein "Wal" kauft aggressiv > $50,000 in einem Trade
+Bedingung 1: Ein "Wal" kauft aggressiv >= $50,000 in einem Trade
 Bedingung 2: Das Order Book zeigt > 1.5x mehr Käufer als Verkäufer
-Bedingung 3: Der 24h-Trend ist positiv
+Bedingung 3: Der 24h-Trend ist nicht negativ
     ────────────────────────────────────────────────
-    → Sofortiger Market-BUY + OCO Stop-Loss/Take-Profit
+    → Market-BUY + OCO Take-Profit/Stop-Loss im Live-Modus
 ```
 
-### Warum Order Flow statt Indikatoren?
+Die Strategie ist ereignisgetrieben: Ein Whale-Buy wird unmittelbar in eine interne Queue geschrieben und dann bewertet. Die tatsaechliche End-to-End-Latenz haengt von Binance-WebSockets, Netzwerk, REST-API und Ausfuehrung ab; sie ist nicht garantiert.
+
+## 2. Marktueberwachung
+
+Der Bot ueberwacht kontinuierlich drei oeffentliche Binance-WebSocket-Streams. Dafuer ist kein API-Key erforderlich.
 
 | Methode | Reaktionszeit | Problem |
 |---------|--------------|---------|
@@ -44,14 +48,9 @@ Bedingung 3: Der 24h-Trend ist positiv
 
 ---
 
-## 2. Datenbasis — 3 WebSocket Streams
-
-Alle drei Streams laufen **gleichzeitig** ohne Unterbrechung:
-
 ### Stream 1: `!miniTicker@arr` — Marktüberblick
-- **Was:** Alle ~284 USDT-Paare, Update jede ~1 Sekunde
-- **Enthält:** Preis, 24h-Change, 24h-Volumen, High/Low
-- **Wozu:** G1 (Liquiditätscheck) + G4 (Trendcheck)
+- Preis, 24h-Aenderung, 24h-Volumen, Hoch und Tief aller USDT-Paare.
+- Der Bot nutzt nur Paare ab `BN_MIN_VOLUME_24H` und waehlt die volumenstaerksten `TOP_PAIRS` fuer die tieferen Streams.
 
 ```
 BTCUSDT → $93,420 | Vol: $2.1B | 24h: -1.6%
@@ -60,9 +59,9 @@ XRPUSDT → $2.41   | Vol: $420M | 24h: +0.8%  ← positiver Trend
 ```
 
 ### Stream 2: `<sym>@aggTrade` — Whale-Detektor
-- **Was:** Jeder einzelne Trade auf Top-20-Paaren, in Echtzeit (<10ms Latenz)
-- **Enthält:** Preis, Menge, Richtung (BUY oder SELL)
-- **Wozu:** G2 (Whale-Signal erkennen)
+- Zusammengefasste Trades der ueberwachten Paare.
+- `m=False` bedeutet: Der Kaeufer war Taker und nahm Liquiditaet aus dem Ask-Book.
+- Ein einzelner Kauf ab `WHALE_THRESHOLD_USDT` erzeugt `WHALE_BUY` und loest die Kandidatenbewertung aus.
 
 ```
 XRPUSDT: $186,746 MARKET-BUY  um 22:01:44.312  → 🐋 WHALE erkannt!
@@ -76,9 +75,9 @@ SOLUSDT: $67,000  MARKET-BUY  um 22:01:45.102  → 🐋 WHALE erkannt!
 - Das Signal wird sofort in die Event-Queue eingestellt (→ Pipeline reagiert in ms)
 
 ### Stream 3: `<sym>@depth5` — Order Book Level 2
-- **Was:** Top 5 Bid/Ask-Ebenen auf Top-20-Paaren, bei jeder Änderung
-- **Enthält:** Preis und Menge pro Ebene
-- **Wozu:** G3 (Kaufdruck messen)
+- Die fuenf besten Bid- und Ask-Preislevel pro ueberwachtem Paar.
+- Ein `BOOK_LONG` entsteht, wenn das notionale Bid/Ask-Verhaeltnis mindestens `IMBALANCE_RATIO` erreicht.
+- Das Dashboard zeigt Stream-Status, frische Whale- und Book-Signale, Kandidaten und die Marktuebersicht. Es steuert keine Trading-Engine und ersetzt keine Positionsueberwachung.
 
 ```
 XRPUSDT Order Book:
@@ -100,31 +99,29 @@ Jeder Coin muss **alle 5 Gates** passieren, bevor eine Order platziert wird:
 ```
 Whale-Trade erkannt ($50k+)
         ↓
-    G1: Liquidität?        Vol > $5M/24h + Daten < 30s alt
+    G1: Liquiditaet?       Vol >= $5M/24h + Daten <= 30s alt
         ↓ OK
     G2: Whale-Signal?      Frischer WHALE_BUY in letzten 30s
         ↓ OK
-    G3: Book Imbalance?    Bid/Ask Ratio > 1.5x
+    G3: Book Imbalance?    Bid/Ask Ratio >= 1.5x
         ↓ OK
-    G4: Trend positiv?     24h-Change > 0%
+    G4: Trendfilter?       24h-Change >= 0%
         ↓ OK
     G5: Position frei?     Aktuelle Pos < MAX_POSITIONS (10)
         ↓ OK
     ✅ MARKET BUY + OCO
 ```
 
-### G1 — Liquiditäts-Filter (silent)
+### G1 — Liquiditaets-Filter
 ```
-Bedingung: 24h-Volumen > $5,000,000
-           Letzte Datenaktualisierung < 30 Sekunden
-Warum: Coins mit wenig Volumen haben große Spreads — 
-       Kauf und Verkauf kostet zu viel.
+Bedingung: 24h-Volumen >= $5,000,000
+        Letzte Datenaktualisierung <= 30 Sekunden
 ```
 
 ### G2 — Whale Buy Signal (löst Event aus)
 ```
-Bedingung: Einzelner aggTrade > $50,000 USDT
-           is_buyer_maker == False (aggressiver Kauf)
+Bedingung: Einzelner aggTrade >= $50,000 USDT
+           m == False (aggressiver Kauf)
            Signal < 30 Sekunden alt
 Warum: Ein institutioneller Akteur kauft aggressiv zum Marktpreis.
        Das bedeutet: Sie wollen jetzt kaufen, egal was es kostet.
@@ -133,19 +130,16 @@ Warum: Ein institutioneller Akteur kauft aggressiv zum Marktpreis.
 
 ### G3 — Order Book Imbalance (Level 2)
 ```
-Bedingung: Bid-Volumen / Ask-Volumen > 1.5
+Bedingung: Bid-Volumen / Ask-Volumen >= 1.5
            Signal < 30 Sekunden alt
 Warum: Wenn viele Käufer im Orderbuch stehen und wenige Verkäufer,
        wird der Preis steigen, sobald die Asks aufgebraucht sind.
        Das nennt man "Absorption" — ein klassisches L2-Signal.
 ```
 
-### G4 — Trend-Bestätigung
+### G4 — Trendfilter
 ```
-Bedingung: 24h-Change > 0% (Coin ist heute positiv)
-Warum: Wir kaufen NICHT gegen den übergeordneten Trend.
-       Ein Whale-Buy in einem fallenden Markt kann ein 
-       Market Maker sein, der Liquidität sucht (Falle!).
+Bedingung: 24h-Change >= 0%
 ```
 
 ### G5 — Positions-Limit & Ausführung
@@ -157,43 +151,7 @@ Bedingung: len(offene_positionen) < MAX_POSITIONS (Standard: 10)
 
 ---
 
-## 4. Event-Driven Architektur
-
-### Das Problem mit Polling (alt)
-```
-Bot checkt alle 3s → Whale passiert um 22:01:44 → Bot reagiert um 22:01:47
-Verzögerung: bis zu 3 Sekunden → Preis bereits bewegt
-```
-
-### Die Lösung: asyncio.Queue (jetzt)
-```
-Whale-Trade erkannt (22:01:44.312)
-    ↓ sofort
-signal_queue.put_nowait(signal)    ← <1ms
-    ↓
-main_loop awaitet queue            ← blockiert bis Signal kommt
-    ↓
-evaluate_candidate() aufgerufen    ← 22:01:44.315 (3ms später!)
-    ↓
-MARKET BUY platziert               ← 22:01:44.450 (<150ms nach Whale!)
-```
-
-### Datenfluss-Diagramm
-```
-Binance WebSocket
-  ├─ !miniTicker@arr ──────────────────→ _tickers{}  (Preis/Vol)
-  ├─ BTCUSDT@aggTrade ─→ Whale? ──→ signal_queue ──→ evaluate()
-  ├─ ETHUSDT@aggTrade ─→ Whale? ──→ signal_queue ──→ evaluate()  
-  ├─ ...@depth5 ───────────────────────→ _signals[]  (BOOK_LONG)
-  └─ ...                                             
-                                    BinanceExecutor
-                                    └─ POST /api/v3/order (MARKET BUY)
-                                    └─ POST /api/v3/order/oco (TP+SL)
-```
-
----
-
-## 5. Order-Ausführung
+## 4. Kauf und Verkauf
 
 ### Kauf (Market Order)
 ```
@@ -201,7 +159,7 @@ Symbol:        XRPUSDT
 Einstieg:      $2.4100 (Marktpreis zum Zeitpunkt des Signals)
 Position:      $10 USDT (konfigurierbar)
 Menge:         10 / 2.41 = 4.149 XRP (gerundet auf Lot-Size)
-Ausführung:    < 500ms nach Signal (Binance REST API)
+Ausfuehrung:   Market-Order im Live-Modus; im Paper-Modus nur lokale Simulation
 ```
 
 ### Automatischer Exit (OCO = One-Cancels-Other)
@@ -212,9 +170,29 @@ Take-Profit:   $2.4100 × 1.015 = $2.4462  (+1.5%) ✅
 Stop-Loss:     $2.4100 × 0.980 = $2.3618  (-2.0%) 🛑
                ────────────────────────────────────────
 Risk/Reward:   1 : 0.75
-Wenn TP erreicht → SL-Order wird automatisch storniert
-Wenn SL erreicht → TP-Order wird automatisch storniert
+Im Live-Modus wird eine OCO-Verkaufsorder an Binance gesendet. Erreicht eine Teilorder das Ziel, soll Binance die andere stornieren.
 ```
+
+Im Paper-Modus wird kein Auftrag an Binance gesendet. Der Bot simuliert den Kauf und ueberwacht danach den Live-Preis: Bei Take-Profit oder Stop-Loss wird ein simulierter Verkauf mit PnL in `binance_orderflow.db` gespeichert und die Position aus `positions.json` entfernt. Das Dashboard zeigt offene Paper-Positionen sowie simulierte Kaeufe und Verkaeufe.
+
+## 5. Vor- und Nachteile
+
+### Vorteile
+
+- Oeffentliche Echtzeitdaten: Fuer Monitoring und Paper-Modus ist kein API-Key noetig.
+- Der Bot begrenzt sich auf liquide USDT-Spot-Paare und eine konfigurierbare Zahl paralleler Positionen.
+- Aggressiver Kauf, sichtbare Book-Imbalance und Trendfilter muessen gemeinsam vorliegen.
+- Eine erfolgreich angelegte OCO-Order kann im Live-Modus Gewinnziel und Verlustbegrenzung abbilden.
+- Das Dashboard macht Verbindung, Signale, Kandidaten und Marktdaten sichtbar.
+
+### Nachteile und Risiken
+
+- Sichtbare Limit-Orders koennen vor der Ausfuehrung zurueckgezogen werden. Eine Imbalance ist kein verlaesslicher Preisindikator.
+- Ein fester Whale-Schwellenwert ist fuer sehr liquide Paare weniger aussagekraeftig als fuer kleinere Paare.
+- Market-Orders koennen Slippage und Gebuehren verursachen; die Paper-Simulation bildet beides nicht ab.
+- Der 24h-Trend ist ein grober Filter und schuetzt nicht vor kurzfristigen Umkehrungen.
+- Es gibt keine automatische Positions- oder OCO-Reconciliation. Schlaegt das Anlegen einer OCO-Order fehl, kann eine ungesicherte Spot-Position bestehen bleiben.
+- Die Strategie ist im Repository nicht historisch gegen Gebuehren, Slippage und verschiedene Marktphasen validiert.
 
 ---
 
@@ -222,6 +200,7 @@ Wenn SL erreicht → TP-Order wird automatisch storniert
 
 ```ini
 # ── Binance API ──────────────────────────────────────────
+# Nur bei DRY_RUN=False erforderlich
 BINANCE_API_KEY=dein_api_key
 BINANCE_SECRET=dein_secret
 
@@ -252,8 +231,8 @@ SIGNAL_TTL=30.0                 # Wie lange ist ein Signal gültig (s)
 
 ```bash
 # Terminal 1 — Trading Engine
-cd ~/Desktop/bot-2
-source venv/bin/activate
+cd /home/alghobariw/Desktop/temp/bot
+source .venv/bin/activate
 python3 main.py
 ```
 
@@ -280,21 +259,22 @@ Binance Order Flow Bot — Event-Driven Whale + Book Imbalance
 
 ```bash
 # Terminal 2 — Dashboard
+cd /home/alghobariw/Desktop/temp/bot
+source .venv/bin/activate
 streamlit run dashboard.py
 # → http://localhost:8501
 ```
 
 ---
 
-## 8. Von Paper zu Live
+## 8. Paper- und Live-Modus
 
 > [!CAUTION]
 > Nur wenn du genau weißt was du tust. Echtes Geld kann verloren gehen.
 
-**Voraussetzungen:**
-1. USDT-Guthaben auf Binance Spot (mind. `POSITION_SIZE × MAX_POSITIONS`)
-2. API-Key hat **Spot Trading** Berechtigung (kein Withdrawal nötig)
-3. Bot wurde im Paper-Modus getestet und Trades erscheinen in der History
+**Paper-Modus:** Bei `DRY_RUN=True` sind keine Binance-API-Schluessel erforderlich. Der Bot nutzt reale Marktdaten, simuliert Kauf und Exit bei Take-Profit oder Stop-Loss und protokolliert beides lokal.
+
+**Live-Modus:** Bei `DRY_RUN=False` braucht das Binance-Spot-Konto ausreichend USDT sowie `BINANCE_API_KEY` und `BINANCE_SECRET` mit Spot-Trading-Berechtigung. Withdrawal muss deaktiviert bleiben; eine IP-Whitelist ist dringend zu empfehlen.
 
 **Aktivierung:**
 ```ini
@@ -305,19 +285,12 @@ BINANCE_MAX_POSITIONS=3         # Max 3 gleichzeitig am Anfang
 BINANCE_STOP_LOSS_PCT=2.0       # Immer Stop-Loss aktiv lassen
 ```
 
-**Geprüfter Account-Status:**
-```
-✅ API Key aktiv | canTrade=True | canWithdraw=True
-⚠️  Kein USDT-Guthaben → Bitte USDT aufladen um live zu handeln
-    Vorhandene Assets: SOL (~$17), EUR ($0.83), USDC ($0.28)
-```
-
 ---
 
 ## 9. Datei-Struktur
 
 ```
-bot-2/
+bot/
 ├── main.py                          # Entry point
 ├── .env                             # Konfiguration & API Keys
 ├── binance_orderflow.db              # SQLite: Trades + Logs
@@ -325,20 +298,15 @@ bot-2/
 │
 ├── src/
 │   ├── adapters/
-│   │   ├── binance_orderflow.py     ⭐ 3 WS Streams + Event-Queue
-│   │   └── binance_stream.py        Dashboard Mini-Ticker
+│   │   └── binance_orderflow.py     3 WebSocket-Streams + Event-Queue
 │   │
 │   ├── bot/
-│   │   ├── orderflow_pipeline.py    ⭐ Gate G1-G5 + Event-Loop
-│   │   └── binance_pipeline.py      (Fallback: 24h Momentum)
+│   │   └── orderflow_pipeline.py    Gate G1-G5 + Event-Loop
 │   │
 │   └── execution/
-│       └── binance_executor.py      ⭐ Binance REST Market+OCO Orders
+│       └── binance_executor.py      Binance REST Market- und OCO-Orders
 │
 └── dashboard/
-    ├── dashboard.py
     └── tabs/
-        ├── live_market.py           Live Markt-Übersicht
-        ├── history.py               Trade History + Live P/L
-        └── positions.py             Offene Positionen
+        └── live_market.py           Live Markt- und Signalsicht
 ```

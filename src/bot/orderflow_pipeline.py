@@ -1,15 +1,15 @@
 """
-src/bot/orderflow_pipeline.py — Order Flow Trading Pipeline
+src/bot/orderflow_pipeline.py — Short-Term Order Flow Scalping Pipeline
 
-Uses Level 2 data (order book + whale trades) to detect high-probability
-entry points and execute fast orders via Binance REST API.
+Entries require several independent confirmations inside one short window
+instead of a single whale print plus a 24h trend value.
 
 Gate System:
-  G1: Liquidity — 24h volume > $5M
-  G2: Whale BUY signal in last 30s
-  G3: Order book LONG imbalance (bids >> asks)
-  G4: Trend positive (24h change > 0%)
-  G5: No existing position → Execute Market BUY + OCO
+  G1: Liquidity, fresh data, tight spread
+  G2: Whale BUY print
+  G3: Persistent order book bid dominance (not a single snapshot)
+  G4: Aggressive buy flow + short-term upward momentum
+  G5: Risk limits -> Market BUY + protective exit
 """
 from __future__ import annotations
 
@@ -32,19 +32,41 @@ DRY_RUN        = os.getenv("DRY_RUN",                    "True").lower() == "tru
 MAX_POSITIONS  = int(os.getenv("BINANCE_MAX_POSITIONS",  "10"))
 POSITION_SIZE  = float(os.getenv("BINANCE_POSITION_SIZE_USDT", "10.0"))
 MIN_VOLUME_24H = float(os.getenv("BN_MIN_VOLUME_24H",   "5000000"))
-SCAN_INTERVAL  = float(os.getenv("SCAN_INTERVAL_SEC",   "3.0"))    # scan every 3s
+
+# Short-term scalping parameters
+FLOW_WINDOW_SEC   = float(os.getenv("SCALP_FLOW_WINDOW_SEC",   "30"))
+MIN_MOMENTUM_PCT  = float(os.getenv("SCALP_MIN_MOMENTUM_PCT",  "0.05"))
+MAX_MOMENTUM_PCT  = float(os.getenv("SCALP_MAX_MOMENTUM_PCT",  "1.50"))
+MIN_FLOW_RATIO    = float(os.getenv("SCALP_MIN_FLOW_RATIO",    "1.6"))
+MIN_PERSISTENCE   = float(os.getenv("SCALP_MIN_PERSISTENCE",   "0.6"))
+MIN_BOOK_SAMPLES  = int(os.getenv("SCALP_MIN_BOOK_SAMPLES",    "5"))
+MAX_SPREAD_BPS    = float(os.getenv("SCALP_MAX_SPREAD_BPS",    "5"))
+MIN_BID_DEPTH     = float(os.getenv("SCALP_MIN_BID_DEPTH_USDT", "25000"))
+MAX_HOLD_SEC      = float(os.getenv("SCALP_MAX_HOLD_SEC",      "300"))
+TRAIL_ACTIVATE    = float(os.getenv("SCALP_TRAIL_ACTIVATE_PCT", "0.8"))
+TRAIL_GIVEBACK    = float(os.getenv("SCALP_TRAIL_GIVEBACK_PCT", "0.4"))
+REGIME_MAX_DROP   = float(os.getenv("SCALP_REGIME_MAX_DROP_PCT", "-5.0"))
+TAKER_FEE_PCT     = float(os.getenv("BINANCE_TAKER_FEE_PCT",   "0.1"))
+SLIPPAGE_BPS      = float(os.getenv("SCALP_SLIPPAGE_BPS",      "2"))
+ROUND_TRIP_COST   = 2 * TAKER_FEE_PCT + (2 * SLIPPAGE_BPS / 100)
 
 
 # ── Gate functions ────────────────────────────────────────────────────────────
 
-def gate1_liquidity(ticker: dict) -> tuple[bool, str]:
+def gate1_liquidity(ticker: dict, metrics: dict) -> tuple[bool, str]:
     vol = ticker.get("volume_24h", 0)
     age = time.time() - ticker.get("updated_at", 0)
     if vol < MIN_VOLUME_24H:
         return False, f"Vol too low: ${vol/1e6:.1f}M < ${MIN_VOLUME_24H/1e6:.0f}M"
     if age > 30:
         return False, f"Stale: {age:.0f}s old"
-    return True, f"Vol OK: ${vol/1e6:.0f}M"
+    if ticker.get("change_24h", 0) < REGIME_MAX_DROP:
+        return False, f"Regime: {ticker.get('change_24h', 0):.2f}% 24h"
+    if metrics["spread_bps"] > MAX_SPREAD_BPS:
+        return False, f"Spread {metrics['spread_bps']:.1f}bps > {MAX_SPREAD_BPS:.1f}"
+    if metrics["bid_vol"] < MIN_BID_DEPTH:
+        return False, f"Thin book: ${metrics['bid_vol']:,.0f}"
+    return True, f"Vol ${vol/1e6:.0f}M | spread {metrics['spread_bps']:.1f}bps"
 
 
 def gate2_whale_signal(symbol: str, adapter: BinanceOrderFlowAdapter) -> tuple[bool, str]:
@@ -56,20 +78,108 @@ def gate2_whale_signal(symbol: str, adapter: BinanceOrderFlowAdapter) -> tuple[b
     return True, f"Whale BUY ${best.value_usd:,.0f} ({best.age_sec:.0f}s ago)"
 
 
-def gate3_book_imbalance(symbol: str, adapter: BinanceOrderFlowAdapter) -> tuple[bool, str]:
-    book_longs = adapter.get_signals(min_type="BOOK_LONG")
-    sym_longs  = [s for s in book_longs if s.symbol == symbol]
-    if not sym_longs:
-        return False, "No book imbalance"
-    best = max(sym_longs, key=lambda s: s.ratio)
-    return True, f"Book LONG ratio={best.ratio:.2f}x ({best.age_sec:.0f}s ago)"
+def gate3_book_pressure(metrics: dict) -> tuple[bool, str]:
+    """Bid dominance must hold across many snapshots, not just one."""
+    if metrics["book_samples"] < MIN_BOOK_SAMPLES:
+        return False, f"Only {metrics['book_samples']} book samples"
+    if metrics["book_persistence"] < MIN_PERSISTENCE:
+        return False, f"Imbalance unstable: {metrics['book_persistence']*100:.0f}%"
+    return True, f"Book bid-dominant {metrics['book_persistence']*100:.0f}% of {metrics['book_samples']} snaps"
 
 
-def gate4_trend(ticker: dict) -> tuple[bool, str]:
-    ch24 = ticker.get("change_24h", 0)
-    if ch24 < 0:
-        return False, f"Downtrend: {ch24:.2f}% 24h"
-    return True, f"Uptrend: {ch24:+.2f}% 24h"
+def gate4_flow_momentum(metrics: dict) -> tuple[bool, str]:
+    """Aggressive buyers must dominate and price must already tick up."""
+    if metrics["trade_count"] < 10:
+        return False, f"Too few trades: {metrics['trade_count']}"
+    if metrics["flow_ratio"] < MIN_FLOW_RATIO:
+        return False, f"Buy flow {metrics['flow_ratio']:.2f}x < {MIN_FLOW_RATIO:.2f}x"
+    if metrics["momentum_pct"] < MIN_MOMENTUM_PCT:
+        return False, f"Momentum {metrics['momentum_pct']:+.3f}% < {MIN_MOMENTUM_PCT:.3f}%"
+    if metrics["momentum_pct"] > MAX_MOMENTUM_PCT:
+        return False, f"Already extended {metrics['momentum_pct']:+.2f}%"
+    return True, (
+        f"Flow {metrics['flow_ratio']:.2f}x | "
+        f"{FLOW_WINDOW_SEC:.0f}s momentum {metrics['momentum_pct']:+.3f}%"
+    )
+
+
+def _save_positions(positions: dict) -> None:
+    try:
+        with open("positions.json", "w") as file:
+            json.dump(positions, file, indent=2)
+    except Exception as error:
+        logger.error(f"Failed to save positions.json: {error}")
+
+
+def _close_paper_position(
+    symbol: str,
+    position: dict,
+    exit_price: float,
+    reason: str,
+    positions: dict,
+) -> None:
+    entry_price = float(position["entry_price"])
+    quantity = float(position["qty"])
+    proceeds = quantity * exit_price
+    pnl_usdt = proceeds - float(position["size_usdt"])
+    pnl_pct = ((exit_price / entry_price) - 1) * 100
+
+    positions.pop(symbol, None)
+    _save_positions(positions)
+
+    try:
+        conn = sqlite3.connect("binance_orderflow.db")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            """INSERT INTO trades
+               (token_address, symbol, entry_price, position_size, score, decision,
+                sell_amount_usd, funnel_stage, gates_passed, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, symbol, exit_price, position["size_usdt"], 0.0,
+             f"SELL (DRY-RUN {reason})", proceeds, "PAPER_EXIT", reason, timestamp),
+        )
+        conn.execute(
+            """INSERT INTO bot_events
+               (event_type, symbol, address, sell_amount_usd, price_usd, pnl_usd, pnl_pct,
+                stage, message, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("SELL", symbol, symbol, proceeds, exit_price, pnl_usdt, pnl_pct,
+             "PAPER_EXIT", reason, timestamp),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as error:
+        logger.error(f"Paper exit DB save failed: {error}")
+
+    logger.success(
+        f"[PAPER] SELL {symbol} | {reason} | exit=${exit_price:.6f} | "
+        f"PnL=${pnl_usdt:+.2f} ({pnl_pct:+.2f}%)"
+    )
+
+
+async def _paper_position_monitor(adapter: BinanceOrderFlowAdapter, positions: dict) -> None:
+    """Close simulated positions when the live price reaches their configured exit."""
+    while True:
+        await asyncio.sleep(1)
+        for symbol, position in list(positions.items()):
+            if not position.get("dry_run"):
+                continue
+
+            ticker = adapter.get_ticker(symbol)
+            if not ticker:
+                continue
+
+            current_price = float(ticker.get("price_usd", 0))
+            entry_price = float(position.get("entry_price", 0))
+            if current_price <= 0 or entry_price <= 0:
+                continue
+
+            take_profit = entry_price * (1 + TAKE_PROFIT_PCT / 100)
+            stop_loss = entry_price * (1 - STOP_LOSS_PCT / 100)
+            if current_price >= take_profit:
+                _close_paper_position(symbol, position, current_price, "TAKE_PROFIT", positions)
+            elif current_price <= stop_loss:
+                _close_paper_position(symbol, position, current_price, "STOP_LOSS", positions)
 
 
 # ── Single candidate evaluation ───────────────────────────────────────────────
@@ -145,11 +255,7 @@ async def evaluate_candidate(
     }
     positions[symbol] = pos_data
 
-    try:
-        with open("positions.json", "w") as f:
-            json.dump(positions, f, indent=2)
-    except Exception as e:
-        logger.error(f"Failed to save positions.json: {e}")
+    _save_positions(positions)
 
     # DB logging
     try:
@@ -214,6 +320,8 @@ async def main_loop() -> None:
 
     asyncio.create_task(adapter.start())
     asyncio.create_task(adapter.cleanup_loop())
+    if DRY_RUN:
+        asyncio.create_task(_paper_position_monitor(adapter, positions))
 
     logger.info("[ORDERFLOW] Warming up streams (10s)...")
     await asyncio.sleep(10)

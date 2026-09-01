@@ -3,13 +3,41 @@ dashboard/tabs/live_market.py — Binance WebSocket Live Market Tab
 
 Zeigt Echtzeit-Binance-Daten (Order Flow, Whales, Imbalances) im Dashboard.
 """
-import time
-import threading
 import asyncio
+import json
+import os
+import sqlite3
+import threading
+import time
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+
+def _load_paper_positions() -> dict:
+    try:
+        with open("positions.json", encoding="utf-8") as file:
+            return json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _load_paper_events() -> pd.DataFrame:
+    try:
+        conn = sqlite3.connect("binance_orderflow.db")
+        events = pd.read_sql_query(
+            """SELECT event_type, symbol, price_usd, buy_amount_usd, sell_amount_usd,
+                      pnl_usd, pnl_pct, stage, message, timestamp
+               FROM bot_events
+               WHERE stage IN ('ORDERFLOW_EXECUTION', 'PAPER_EXIT')
+               ORDER BY id DESC LIMIT 20""",
+            conn,
+        )
+        conn.close()
+        return events
+    except (sqlite3.Error, OSError):
+        return pd.DataFrame()
 
 
 @st.cache_resource
@@ -167,6 +195,72 @@ def render():
                 st.markdown(feed_html, unsafe_allow_html=True)
             else:
                 st.info("No fresh signals...")
+
+        # ── Paper trading simulation ───────────────────────────────────────────
+        st.markdown("---")
+        st.markdown('<div class="section-header">Paper Trading Simulation</div>', unsafe_allow_html=True)
+        positions = _load_paper_positions()
+        take_profit_pct = float(os.getenv("BINANCE_TAKE_PROFIT_PCT", "1.5"))
+        stop_loss_pct = float(os.getenv("BINANCE_STOP_LOSS_PCT", "2.0"))
+        paper_positions = {
+            symbol: position for symbol, position in positions.items() if position.get("dry_run")
+        }
+        events = _load_paper_events()
+        completed_sells = events[events["stage"] == "PAPER_EXIT"] if not events.empty else pd.DataFrame()
+        realized_pnl = completed_sells["pnl_usd"].fillna(0).sum() if not completed_sells.empty else 0.0
+
+        metric_open, metric_invested, metric_closed, metric_pnl = st.columns(4)
+        metric_open.metric("Offene Paper-Positionen", len(paper_positions))
+        metric_invested.metric(
+            "Aktuell investiert",
+            f"${sum(float(position.get('size_usdt', 0)) for position in paper_positions.values()):,.2f}",
+        )
+        metric_closed.metric("Simulierte Verkaeufe", len(completed_sells))
+        metric_pnl.metric("Realisierter PnL", f"${realized_pnl:+,.2f}")
+
+        simulation_left, simulation_right = st.columns(2)
+        with simulation_left:
+            st.markdown("**Offene simulierte Positionen**")
+            position_rows = []
+            for symbol, position in paper_positions.items():
+                entry_price = float(position.get("entry_price", 0))
+                current_price = float(tickers.get(symbol, {}).get("price_usd", entry_price))
+                pnl_pct = ((current_price / entry_price) - 1) * 100 if entry_price else 0
+                position_rows.append({
+                    "Paar": symbol.replace("USDT", "/USDT"),
+                    "Einstieg": entry_price,
+                    "Aktuell": current_price,
+                    "PnL %": pnl_pct,
+                    "TP": entry_price * (1 + take_profit_pct / 100),
+                    "SL": entry_price * (1 - stop_loss_pct / 100),
+                })
+            if position_rows:
+                st.dataframe(
+                    pd.DataFrame(position_rows).style.format({
+                        "Einstieg": "${:.6f}", "Aktuell": "${:.6f}", "PnL %": "{:+.2f}%",
+                        "TP": "${:.6f}", "SL": "${:.6f}",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("Noch keine offene Paper-Position.")
+
+        with simulation_right:
+            st.markdown("**Letzte simulierte Ausfuehrungen**")
+            if events.empty:
+                st.info("Noch keine Simulation. Ein Kauf erscheint nach einem vollstaendigen Orderflow-Signal.")
+            else:
+                st.dataframe(
+                    events.assign(Paar=events["symbol"].str.replace("USDT", "/USDT", regex=False))[
+                        ["timestamp", "event_type", "Paar", "price_usd", "pnl_usd", "pnl_pct", "message"]
+                    ].rename(columns={
+                        "timestamp": "Zeit", "event_type": "Aktion", "price_usd": "Preis",
+                        "pnl_usd": "PnL $", "pnl_pct": "PnL %", "message": "Grund",
+                    }).style.format({"Preis": "${:.6f}", "PnL $": "${:+.2f}", "PnL %": "{:+.2f}%"}),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
         # ── Full market table ─────────────────────────────────────────────────────
         st.markdown("---")
