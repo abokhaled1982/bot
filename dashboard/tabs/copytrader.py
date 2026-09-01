@@ -232,7 +232,7 @@ def _render_search(adapter):
         with c5:
             min_account_value = st.number_input("Min. Account-Wert ($)", min_value=0, value=0, step=1000)
         with c6:
-            limit = st.slider("Anzahl Kandidaten (Scan)", 5, 100, 30)
+            limit = st.slider("Anzahl Kandidaten (Scan)", 5, 60, 15)
         with c7:
             sort_by = st.selectbox(
                 "Sortieren nach",
@@ -241,14 +241,29 @@ def _render_search(adapter):
 
         submitted = st.form_submit_button("🔎 Suchen", type="primary", width="stretch")
 
+    st.caption(
+        "⚠️ Die Hyperliquid-API ist ratenlimitiert (~2s pro Kandidat) und wird auch vom "
+        "laufenden Copy-Trader im Hintergrund genutzt — die Suche kann daher je nach "
+        "Kandidatenzahl 30s bis über eine Minute dauern."
+    )
+
     if submitted:
-        with st.spinner(f"Durchsuche Hyperliquid-Leaderboard ({window})..."):
-            results = adapter.list_leaderboard(
-                window=window, limit=limit,
-                min_trades=min_trades, min_win_rate=min_win_rate,
-                max_avg_hold_sec=max_hold_min * 60 if max_hold_min else None,
-                min_account_value=min_account_value,
-            )
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
+
+        def _on_progress(done: int, total: int, wallet: str) -> None:
+            progress_bar.progress(done / total)
+            status_text.caption(f"Prüfe Kandidat {done}/{total}: {_short(wallet)}...")
+
+        results = adapter.list_leaderboard(
+            window=window, limit=limit,
+            min_trades=min_trades, min_win_rate=min_win_rate,
+            max_avg_hold_sec=max_hold_min * 60 if max_hold_min else None,
+            min_account_value=min_account_value,
+            progress_cb=_on_progress,
+        )
+        progress_bar.empty()
+        status_text.empty()
         st.session_state["search_results"] = results
         st.session_state["search_window"] = window
 

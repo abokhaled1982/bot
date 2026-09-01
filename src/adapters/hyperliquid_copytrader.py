@@ -285,11 +285,15 @@ class HyperliquidCopyTrader:
         min_trades: int = 0, min_win_rate: float = 0.0,
         max_avg_hold_sec: Optional[float] = None,
         min_account_value: float = 0.0,
+        progress_cb: Optional[callable] = None,
     ) -> list[dict]:
         """Rank HL leaderboard traders by PnL in a user-chosen window and attach fill metrics.
 
         Used by the dashboard's manual trader search — unlike `_discover_scalpers`,
         callers pick their own window/filters instead of the fixed HL_* env defaults.
+        The HL API is rate-limited, so each candidate's fills lookup is throttled
+        (~2s apart) — `progress_cb(done, total, wallet)` lets callers show progress
+        instead of a long silent block.
         """
         rows = self._fetch_leaderboard()
         if not rows:
@@ -309,9 +313,12 @@ class HyperliquidCopyTrader:
             ranked.append((wallet, pnl, {"account_value": acct_value, "pnl": pnl, "vlm": vlm}))
 
         ranked.sort(key=lambda r: r[1], reverse=True)
+        candidates = ranked[:limit]
 
         results = []
-        for wallet, _, info in ranked[:limit]:
+        for i, (wallet, _, info) in enumerate(candidates, 1):
+            if progress_cb:
+                progress_cb(i, len(candidates), wallet)
             metrics = self._compute_trader_metrics(wallet)
             if metrics is None:
                 continue
@@ -549,24 +556,42 @@ class HyperliquidCopyTrader:
                     self._ws_connected = True
                     delay = 5
                     logger.info("[HL-COPY] ✅ WebSocket connected")
-                    for wallet in list(self._wallets):
-                        await ws.send(json.dumps({
-                            "method": "subscribe",
-                            "subscription": {
-                                "type": "userFills", "user": wallet,
-                            },
-                        }))
-                    async for raw in ws:
-                        try:
-                            msg = json.loads(raw)
-                            await self._handle_ws_message(msg)
-                        except Exception as e:
-                            logger.debug(f"[HL-COPY] WS parse: {e}")
+                    subscribed: set[str] = set()
+                    await self._ws_sync_subscriptions(ws, subscribed)
+
+                    async def _resubscribe_loop() -> None:
+                        # Wallets added later (dashboard activate / auto-discovery rescan)
+                        # get subscribed here without needing a full reconnect.
+                        while True:
+                            await asyncio.sleep(10)
+                            await self._ws_sync_subscriptions(ws, subscribed)
+
+                    resub_task = asyncio.create_task(_resubscribe_loop())
+                    try:
+                        async for raw in ws:
+                            try:
+                                msg = json.loads(raw)
+                                await self._handle_ws_message(msg)
+                            except Exception as e:
+                                logger.debug(f"[HL-COPY] WS parse: {e}")
+                    finally:
+                        resub_task.cancel()
             except Exception as e:
                 self._ws_connected = False
                 logger.warning(f"[HL-COPY] WS reconnect in {delay}s: {e}")
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60)
+
+    async def _ws_sync_subscriptions(self, ws, subscribed: set[str]) -> None:
+        """Subscribe any newly-tracked wallet not yet subscribed on this connection."""
+        for wallet in list(self._wallets):
+            if wallet in subscribed:
+                continue
+            await ws.send(json.dumps({
+                "method": "subscribe",
+                "subscription": {"type": "userFills", "user": wallet},
+            }))
+            subscribed.add(wallet)
 
     async def _handle_ws_message(self, msg: dict) -> None:
         channel = msg.get("channel", "")
