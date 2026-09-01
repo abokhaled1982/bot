@@ -120,9 +120,10 @@ def _close_paper_position(
 ) -> None:
     entry_price = float(position["entry_price"])
     quantity = float(position["qty"])
+    gross_pct = ((exit_price / entry_price) - 1) * 100
+    pnl_pct = gross_pct - ROUND_TRIP_COST
     proceeds = quantity * exit_price
-    pnl_usdt = proceeds - float(position["size_usdt"])
-    pnl_pct = ((exit_price / entry_price) - 1) * 100
+    pnl_usdt = float(position["size_usdt"]) * pnl_pct / 100
 
     positions.pop(symbol, None)
     _save_positions(positions)
@@ -153,12 +154,12 @@ def _close_paper_position(
 
     logger.success(
         f"[PAPER] SELL {symbol} | {reason} | exit=${exit_price:.6f} | "
-        f"PnL=${pnl_usdt:+.2f} ({pnl_pct:+.2f}%)"
+        f"gross {gross_pct:+.2f}% | net PnL=${pnl_usdt:+.2f} ({pnl_pct:+.2f}%)"
     )
 
 
 async def _paper_position_monitor(adapter: BinanceOrderFlowAdapter, positions: dict) -> None:
-    """Close simulated positions when the live price reaches their configured exit."""
+    """Close simulated positions on target, stop, trailing give-back or timeout."""
     while True:
         await asyncio.sleep(1)
         for symbol, position in list(positions.items()):
@@ -174,12 +175,20 @@ async def _paper_position_monitor(adapter: BinanceOrderFlowAdapter, positions: d
             if current_price <= 0 or entry_price <= 0:
                 continue
 
-            take_profit = entry_price * (1 + TAKE_PROFIT_PCT / 100)
-            stop_loss = entry_price * (1 - STOP_LOSS_PCT / 100)
-            if current_price >= take_profit:
+            peak_price = max(float(position.get("peak_price", entry_price)), current_price)
+            position["peak_price"] = peak_price
+            gain_pct = (current_price / entry_price - 1) * 100
+            peak_gain_pct = (peak_price / entry_price - 1) * 100
+            held_sec = time.time() - float(position.get("opened_at", time.time()))
+
+            if gain_pct >= TAKE_PROFIT_PCT:
                 _close_paper_position(symbol, position, current_price, "TAKE_PROFIT", positions)
-            elif current_price <= stop_loss:
+            elif gain_pct <= -STOP_LOSS_PCT:
                 _close_paper_position(symbol, position, current_price, "STOP_LOSS", positions)
+            elif peak_gain_pct >= TRAIL_ACTIVATE and (peak_gain_pct - gain_pct) >= TRAIL_GIVEBACK:
+                _close_paper_position(symbol, position, current_price, "TRAILING_STOP", positions)
+            elif held_sec >= MAX_HOLD_SEC:
+                _close_paper_position(symbol, position, current_price, "TIME_EXIT", positions)
 
 
 # ── Single candidate evaluation ───────────────────────────────────────────────
@@ -195,8 +204,10 @@ async def evaluate_candidate(
     if symbol in positions:
         return False
 
+    metrics = adapter.get_flow_metrics(symbol, FLOW_WINDOW_SEC)
+
     # G1 — silent (too many coins fail here)
-    ok, reason = gate1_liquidity(ticker)
+    ok, reason = gate1_liquidity(ticker, metrics)
     if not ok:
         return False
 
@@ -206,17 +217,15 @@ async def evaluate_candidate(
         return False
 
     # G3 — if we reach here, start logging
-    ok, g3_reason = gate3_book_imbalance(symbol, adapter)
+    ok, g3_reason = gate3_book_pressure(metrics)
     if not ok:
-        logger.info(f"[{symbol}] 🐳+G2✔ G3✖ Whale OK ({g2_reason}) | Book FAIL (no imbalance)")
+        logger.info(f"[{symbol}] G2✔ G3✖ {g2_reason} | {g3_reason}")
         return False
 
     # G4
-    ok, g4_reason = gate4_trend(ticker)
+    ok, g4_reason = gate4_flow_momentum(metrics)
     if not ok:
-        logger.info(
-            f"[{symbol}] 🐳+G2✔ 📗+G3✔ G4✖ | {g2_reason} | {g3_reason} | Trend: {g4_reason}"
-        )
+        logger.info(f"[{symbol}] G2✔ G3✔ G4✖ | {g3_reason} | {g4_reason}")
         return False
 
     # G5
@@ -250,6 +259,7 @@ async def evaluate_candidate(
         "qty":         exec_qty,
         "size_usdt":   POSITION_SIZE,
         "opened_at":   time.time(),
+        "peak_price":  exec_price,
         "order_id":    order.get("orderId", ""),
         "dry_run":     DRY_RUN,
     }
@@ -292,13 +302,22 @@ async def evaluate_candidate(
 
 async def main_loop() -> None:
     logger.info("=" * 65)
-    logger.info("Binance Order Flow Bot — Event-Driven Whale + Book Imbalance")
+    logger.info("Binance Short-Term Order Flow Scalper")
     logger.info(f"DRY_RUN: {DRY_RUN} | Size: ${POSITION_SIZE} USDT/trade")
     logger.info(f"Whale threshold: ${float(os.getenv('WHALE_THRESHOLD_USDT', '50000')):,.0f} | "
                 f"Imbalance: {float(os.getenv('IMBALANCE_RATIO', '1.5')):.1f}x")
-    logger.info(f"SL: -{STOP_LOSS_PCT}% | TP: +{TAKE_PROFIT_PCT}%")
-    logger.info("⚡ Mode: EVENT-DRIVEN (reacts within milliseconds of whale trade)")
+    logger.info(f"SL: -{STOP_LOSS_PCT}% | TP: +{TAKE_PROFIT_PCT}% | "
+                f"Trail: {TRAIL_ACTIVATE}%/{TRAIL_GIVEBACK}% | Max hold: {MAX_HOLD_SEC:.0f}s")
+    logger.info(f"Flow window: {FLOW_WINDOW_SEC:.0f}s | Min flow {MIN_FLOW_RATIO}x | "
+                f"Min momentum {MIN_MOMENTUM_PCT}% | Max spread {MAX_SPREAD_BPS}bps")
+    logger.info(f"Assumed round-trip cost: {ROUND_TRIP_COST:.3f}% — TP must exceed this")
     logger.info("=" * 65)
+
+    if TAKE_PROFIT_PCT <= ROUND_TRIP_COST:
+        logger.warning(
+            f"TP {TAKE_PROFIT_PCT}% is not above cost {ROUND_TRIP_COST:.3f}% — "
+            "every winning trade would still lose money."
+        )
 
     if not DRY_RUN:
         bal = get_account_balance("USDT")

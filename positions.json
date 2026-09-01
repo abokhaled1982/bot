@@ -14,14 +14,5 @@
     "opened_at": 1776799659.832955,
     "change_24h": 18.51549755301795,
     "score": 44.5
-  },
-  "USDCUSDT": {
-    "symbol": "USDCUSDT",
-    "entry_price": 0.99956,
-    "qty": 10.0,
-    "size_usdt": 10.0,
-    "opened_at": 1776801800.271126,
-    "order_id": "DRY_1776801799",
-    "dry_run": true
   }
 }

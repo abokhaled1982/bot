@@ -22,16 +22,18 @@
 
 ### Was ist Order Flow Trading?
 
-Der Bot sucht bei liquiden Binance-Spot-Paaren nach kurzfristigem Kaufdruck. Er kombiniert einen grossen aggressiven Kauf mit einem unausgeglichenen Orderbook und einem nicht-negativen 24h-Trend. Das ist ein regelbasiertes Long-Setup, keine Prognose und keine Renditegarantie.
+Der Bot sucht bei liquiden Binance-Spot-Paaren nach kurzfristigem Kaufdruck. Ein Einstieg verlangt mehrere unabhaengige Bestaetigungen im selben Sekundenfenster statt eines einzelnen Whale-Prints plus 24h-Wert. Das ist ein regelbasiertes Long-Setup, keine Prognose und keine Renditegarantie.
 
 ### Das Kernprinzip
 
 ```
 Bedingung 1: Ein "Wal" kauft aggressiv >= $50,000 in einem Trade
-Bedingung 2: Das Order Book zeigt > 1.5x mehr Käufer als Verkäufer
-Bedingung 3: Der 24h-Trend ist nicht negativ
+Bedingung 2: Bid-Dominanz haelt ueber viele Orderbuch-Snapshots an
+Bedingung 3: Aggressives Kaufvolumen schlaegt Verkaufsvolumen (>= 1.6x)
+Bedingung 4: Der Preis tickt im Sekundenfenster bereits nach oben
+Bedingung 5: Spread eng genug, Buch tief genug
     ────────────────────────────────────────────────
-    → Market-BUY + OCO Take-Profit/Stop-Loss im Live-Modus
+    → Market-BUY + Take-Profit / Stop-Loss / Trailing / Zeit-Exit
 ```
 
 Die Strategie ist ereignisgetrieben: Ein Whale-Buy wird unmittelbar in eine interne Queue geschrieben und dann bewertet. Die tatsaechliche End-to-End-Latenz haengt von Binance-WebSockets, Netzwerk, REST-API und Ausfuehrung ab; sie ist nicht garantiert.
@@ -99,23 +101,29 @@ Jeder Coin muss **alle 5 Gates** passieren, bevor eine Order platziert wird:
 ```
 Whale-Trade erkannt ($50k+)
         ↓
-    G1: Liquiditaet?       Vol >= $5M/24h + Daten <= 30s alt
+    G1: Marktqualitaet?    Vol >= $5M/24h, Daten <= 30s, Spread <= 5bps,
+                           Buchtiefe >= $25k, kein 24h-Absturz (< -5%)
         ↓ OK
     G2: Whale-Signal?      Frischer WHALE_BUY in letzten 30s
         ↓ OK
-    G3: Book Imbalance?    Bid/Ask Ratio >= 1.5x
+    G3: Buch-Persistenz?   >= 60% der Snapshots bid-dominant (min. 5 Snaps)
         ↓ OK
-    G4: Trendfilter?       24h-Change >= 0%
+    G4: Flow + Momentum?   Kauf/Verkauf >= 1.6x UND 30s-Momentum +0.05%..+1.5%
         ↓ OK
-    G5: Position frei?     Aktuelle Pos < MAX_POSITIONS (10)
+    G5: Position frei?     Aktuelle Pos < MAX_POSITIONS
         ↓ OK
-    ✅ MARKET BUY + OCO
+    ✅ MARKET BUY + Exit-Management
 ```
 
-### G1 — Liquiditaets-Filter
+### G1 — Marktqualitaet
 ```
 Bedingung: 24h-Volumen >= $5,000,000
-        Letzte Datenaktualisierung <= 30 Sekunden
+           Letzte Datenaktualisierung <= 30 Sekunden
+           Spread <= SCALP_MAX_SPREAD_BPS (Standard 5 bps)
+           Bid-Tiefe >= SCALP_MIN_BID_DEPTH_USDT (Standard $25,000)
+           24h-Change >= SCALP_REGIME_MAX_DROP_PCT (Standard -5%)
+Warum: Enger Spread und echte Tiefe entscheiden beim Scalping ueber die Kosten.
+       Der 24h-Wert dient nur noch als grober Crash-Schutz, nicht als Trendsignal.
 ```
 
 ### G2 — Whale Buy Signal (löst Event aus)
@@ -123,23 +131,23 @@ Bedingung: 24h-Volumen >= $5,000,000
 Bedingung: Einzelner aggTrade >= $50,000 USDT
            m == False (aggressiver Kauf)
            Signal < 30 Sekunden alt
-Warum: Ein institutioneller Akteur kauft aggressiv zum Marktpreis.
-       Das bedeutet: Sie wollen jetzt kaufen, egal was es kostet.
-       Das ist ein starkes Indiz für eine erwartete Kursbewegung nach oben.
 ```
 
-### G3 — Order Book Imbalance (Level 2)
+### G3 — Orderbuch-Persistenz
 ```
-Bedingung: Bid-Volumen / Ask-Volumen >= 1.5
-           Signal < 30 Sekunden alt
-Warum: Wenn viele Käufer im Orderbuch stehen und wenige Verkäufer,
-       wird der Preis steigen, sobald die Asks aufgebraucht sind.
-       Das nennt man "Absorption" — ein klassisches L2-Signal.
+Bedingung: >= SCALP_MIN_PERSISTENCE der Snapshots im Fenster bid-dominant
+           mindestens SCALP_MIN_BOOK_SAMPLES Snapshots vorhanden
+Warum: Ein einzelner Snapshot ist wertlos, weil Limit-Orders sofort verschwinden
+       koennen. Nur anhaltende Bid-Dominanz zaehlt als Kaufdruck.
 ```
 
-### G4 — Trendfilter
+### G4 — Aggressiver Flow und Momentum
 ```
-Bedingung: 24h-Change >= 0%
+Bedingung: Kaufvolumen / Verkaufsvolumen >= SCALP_MIN_FLOW_RATIO (1.6x)
+           Momentum im Fenster zwischen +0.05% und +1.5%
+           mindestens 10 Trades im Fenster
+Warum: Der Bot will echten Taker-Kaufdruck sehen und nicht einer Bewegung
+       hinterherlaufen, die bereits ausgelaufen ist.
 ```
 
 ### G5 — Positions-Limit & Ausführung
@@ -148,6 +156,18 @@ Bedingung: len(offene_positionen) < MAX_POSITIONS (Standard: 10)
 → MARKET BUY platzieren
 → OCO SELL setzen (TP + SL gleichzeitig)
 ```
+
+### Exit-Management
+```
+Take-Profit:    +BINANCE_TAKE_PROFIT_PCT
+Stop-Loss:      -BINANCE_STOP_LOSS_PCT
+Trailing:       ab +SCALP_TRAIL_ACTIVATE_PCT Gewinn, Ausstieg nach
+                SCALP_TRAIL_GIVEBACK_PCT Rueckgabe vom Hoch
+Zeit-Exit:      nach SCALP_MAX_HOLD_SEC (Standard 300s)
+```
+
+Die Paper-Simulation zieht Handelskosten ab:
+`2 x BINANCE_TAKER_FEE_PCT + 2 x SCALP_SLIPPAGE_BPS`. Bei Standardwerten sind das rund `0.24%` pro Round-Trip. Liegt das Take-Profit-Ziel darunter, warnt der Bot beim Start, weil dann selbst Gewinntrades netto verlieren.
 
 ---
 

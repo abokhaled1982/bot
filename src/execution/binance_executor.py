@@ -11,6 +11,7 @@ import hmac
 import os
 import time
 import urllib.parse
+from decimal import Decimal, ROUND_DOWN
 
 import requests
 from loguru import logger
@@ -78,11 +79,13 @@ def get_symbol_info(symbol: str) -> dict:
 
 
 def _round_step(value: float, step: float) -> float:
-    """Round value to nearest step size."""
+    """Round a quantity down to Binance's permitted lot-size step."""
     if step == 0:
         return value
-    precision = len(str(step).rstrip("0").split(".")[-1]) if "." in str(step) else 0
-    return round(round(value / step) * step, precision)
+    decimal_value = Decimal(str(value))
+    decimal_step = Decimal(str(step))
+    units = (decimal_value / decimal_step).to_integral_value(rounding=ROUND_DOWN)
+    return float(units * decimal_step)
 
 
 def place_market_buy(symbol: str, usdt_amount: float) -> dict | None:

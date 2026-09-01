@@ -40,6 +40,52 @@ def _load_paper_events() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _gate_badge(passed: bool) -> str:
+    return "PASS" if passed else "STOP"
+
+
+def _strategy_snapshot(adapter, tickers: dict, positions: dict) -> tuple[list[dict], dict | None]:
+    from src.bot.orderflow_pipeline import (
+        FLOW_WINDOW_SEC,
+        MAX_POSITIONS,
+        gate1_liquidity,
+        gate2_whale_signal,
+        gate3_book_pressure,
+        gate4_flow_momentum,
+    )
+
+    rows = []
+    for symbol in sorted(tickers, key=lambda item: tickers[item]["volume_24h"], reverse=True):
+        ticker = tickers[symbol]
+        metrics = adapter.get_flow_metrics(symbol, FLOW_WINDOW_SEC)
+        if metrics["book_age_sec"] > 5:
+            continue
+        g1, g1_reason = gate1_liquidity(ticker, metrics)
+        g2, g2_reason = gate2_whale_signal(symbol, adapter)
+        g3, g3_reason = gate3_book_pressure(metrics)
+        g4, g4_reason = gate4_flow_momentum(metrics)
+        g5 = symbol not in positions and len(positions) < MAX_POSITIONS
+        g5_reason = "Position frei" if g5 else "Position bereits offen oder Limit erreicht"
+        checks = [g1, g2, g3, g4, g5]
+        reasons = [g1_reason, g2_reason, g3_reason, g4_reason, g5_reason]
+        first_stop = next((reason for passed, reason in zip(checks, reasons) if not passed), "Alle Gates bestanden")
+
+        rows.append({
+            "symbol": symbol,
+            "price": ticker["price_usd"],
+            "checks": checks,
+            "reason": first_stop,
+            "metrics": metrics,
+            "approved": all(checks),
+        })
+
+        if len(rows) == 12:
+            break
+
+    best = max(rows, key=lambda row: (sum(row["checks"]), row["metrics"]["flow_ratio"]), default=None)
+    return rows, best
+
+
 @st.cache_resource
 def _get_adapter():
     """Return (or create) the singleton BinanceOrderFlowAdapter."""
@@ -131,70 +177,63 @@ def render():
             st.info("⏳ Verbinde mit Binance und warte auf Level 2 Daten... Bitte warten.")
             return
 
-        # ── Order Flow Signals (Top Section) ──────────────────────────────────────
-        col_left, col_right = st.columns([3, 2])
+        # ── Trading decision ─────────────────────────────────────────────────────
+        positions = _load_paper_positions()
+        strategy_rows, best = _strategy_snapshot(adapter, tickers, positions)
+        st.markdown('<div class="section-header">Aktuelle Trading-Entscheidung</div>', unsafe_allow_html=True)
 
-        with col_left:
-            st.markdown('<div class="section-header">🎯 Order Flow Kandidaten (Bot Fokus)</div>', unsafe_allow_html=True)
-            st.caption("Coins mit Whale-Käufen UND Order Book Kaufdruck (Score ≥ 2)")
+        if best and best["approved"]:
+            st.success(
+                f"KAUFEN (nur Simulation): {best['symbol'].replace('USDT', '/USDT')} besteht alle fuenf Regeln."
+            )
+        elif best:
+            st.warning(
+                f"WARTEN: Das beste beobachtete Paar ist {best['symbol'].replace('USDT', '/USDT')}. "
+                f"Noch kein Kauf, weil: {best['reason']}"
+            )
+        else:
+            st.info("Warte auf genug Orderbook- und Trade-Daten fuer eine Entscheidung.")
 
-            if candidates:
-                rows = []
-                for c in candidates:
-                    ch24  = c.get("change_24h", 0)
-                    score = c.get("orderflow_score", 0)
-                    sigs  = ", ".join([s.replace("WHALE_BUY", "🐋 BUY").replace("BOOK_LONG", "📗 L-BOOK") for s in c.get("signals", [])])
-                    
-                    rows.append({
-                        "Symbol":    c["symbol"].replace("USDT", "/USDT"),
-                        "Preis $":   f"${c['price_usd']:.6f}",
-                        "Score":     score,
-                        "Signale (Letzte 30s)": sigs,
-                        "24h %":     ch24,
-                        "Vol 24h":   c["volume_24h"] / 1e6,
-                    })
+        decision_rows = []
+        for row in strategy_rows:
+            metrics = row["metrics"]
+            decision_rows.append({
+                "Paar": row["symbol"].replace("USDT", "/USDT"),
+                "Entscheidung": "KAUFEN" if row["approved"] else "WARTEN",
+                "G1 Markt": _gate_badge(row["checks"][0]),
+                "G2 Whale": _gate_badge(row["checks"][1]),
+                "G3 Buch": _gate_badge(row["checks"][2]),
+                "G4 Flow": _gate_badge(row["checks"][3]),
+                "G5 Risiko": _gate_badge(row["checks"][4]),
+                "Warum warten?": "-" if row["approved"] else row["reason"],
+                "Flow": metrics["flow_ratio"],
+                "Momentum": metrics["momentum_pct"],
+                "Spread": metrics["spread_bps"],
+            })
 
-                df = pd.DataFrame(rows)
+        if decision_rows:
+            decisions = pd.DataFrame(decision_rows)
+            st.dataframe(
+                decisions.style.format({"Flow": "{:.2f}x", "Momentum": "{:+.3f}%", "Spread": "{:.1f} bps"}),
+                width="stretch",
+                hide_index=True,
+                height=360,
+            )
 
-                def _color_pct(v):
-                    if isinstance(v, float):
-                        if v > 0:  return "color: #00e6a7; font-weight: 700"
-                        if v < 0:  return "color: #ff5c5c"
-                    return "color: #64748b"
+        with st.expander("Was bedeuten die Regeln?", expanded=False):
+            st.markdown(
+                "**G1 Markt:** Das Paar muss handelbar sein: enger Spread, genug Buchtiefe und kein starker Tagescrash.  \n"
+                "**G2 Whale:** Ein grosser aggressiver Kauf ist gerade passiert.  \n"
+                "**G3 Buch:** Die Kaufseite des Orderbooks war nicht nur einmal, sondern wiederholt staerker.  \n"
+                "**G4 Flow:** In den letzten 30 Sekunden ueberwiegen Marktkaeufe und der Preis steigt leicht.  \n"
+                "**G5 Risiko:** Es gibt noch Platz im Positionslimit und das Paar ist noch nicht offen."
+            )
 
-                styled = (
-                    df.style
-                    .format({"24h %": "{:+.2f}%", "Vol 24h": "${:.1f}M"})
-                    .map(_color_pct, subset=["24h %"])
-                    .set_properties(**{"background-color": "#0c0f16", "color": "#e2e8f0"})
-                )
-                st.dataframe(styled, use_container_width=True, height=250)
-            else:
-                st.info("Warte auf frische Whale Trades und Book Imbalances... (Signale verfallen nach 30s)")
-
-        with col_right:
-            st.markdown('<div class="section-header">🐋 Live Whale & Book Feed</div>', unsafe_allow_html=True)
-            st.caption("Signale der letzten 30 Sekunden (Top 20 Paare)")
-            
-            if signals:
-                feed_html = '<div style="max-height: 250px; overflow-y: auto; font-family: monospace; background: #0c0f16; padding: 10px; border-radius: 8px; border: 1px solid #1e2536;">'
-                for sig in signals[:15]:
-                    sym = sig.symbol.replace("USDT", "")
-                    age = int(sig.age_sec)
-                    
-                    if sig.signal == "WHALE_BUY":
-                        feed_html += f'<div style="color: #00e6a7; margin-bottom: 4px;">🐋 BUY  <b>{sym:6}</b>: ${sig.value_usd/1000:,.0f}k @ ${sig.price:.4f} <span style="color:#64748b; font-size: 0.8em; float: right;">{age}s ago</span></div>'
-                    elif sig.signal == "WHALE_SELL":
-                        feed_html += f'<div style="color: #ff5c5c; margin-bottom: 4px;">🐋 SELL <b>{sym:6}</b>: ${sig.value_usd/1000:,.0f}k @ ${sig.price:.4f} <span style="color:#64748b; font-size: 0.8em; float: right;">{age}s ago</span></div>'
-                    elif sig.signal == "BOOK_LONG":
-                        feed_html += f'<div style="color: #22c55e; margin-bottom: 4px;">📗 L-BOOK <b>{sym:6}</b>: {sig.ratio:.1f}x Bid/Ask <span style="color:#64748b; font-size: 0.8em; float: right;">{age}s ago</span></div>'
-                    elif sig.signal == "BOOK_SHORT":
-                        feed_html += f'<div style="color: #f87171; margin-bottom: 4px;">📕 S-BOOK <b>{sym:6}</b>: {sig.ratio:.2f}x Bid/Ask <span style="color:#64748b; font-size: 0.8em; float: right;">{age}s ago</span></div>'
-                        
-                feed_html += '</div>'
-                st.markdown(feed_html, unsafe_allow_html=True)
-            else:
-                st.info("No fresh signals...")
+        if signals:
+            st.caption("Letzte Marktsignale: " + " | ".join(
+                f"{signal.symbol.replace('USDT', '/USDT')} {signal.signal} ({int(signal.age_sec)}s)"
+                for signal in signals[:6]
+            ))
 
         # ── Paper trading simulation ───────────────────────────────────────────
         st.markdown("---")
@@ -240,7 +279,7 @@ def render():
                         "Einstieg": "${:.6f}", "Aktuell": "${:.6f}", "PnL %": "{:+.2f}%",
                         "TP": "${:.6f}", "SL": "${:.6f}",
                     }),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -258,7 +297,7 @@ def render():
                         "timestamp": "Zeit", "event_type": "Aktion", "price_usd": "Preis",
                         "pnl_usd": "PnL $", "pnl_pct": "PnL %", "message": "Grund",
                     }).style.format({"Preis": "${:.6f}", "PnL $": "${:+.2f}", "PnL %": "{:+.2f}%"}),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -297,6 +336,6 @@ def render():
                      subset=["24h %"])
                 .set_properties(**{"background-color": "#0c0f16", "color": "#e2e8f0"})
             )
-            st.dataframe(styled_full, use_container_width=True, height=380)
+            st.dataframe(styled_full, width="stretch", height=380)
 
     _render_live()
