@@ -31,12 +31,13 @@ Bedingung 1: Ein "Wal" kauft aggressiv >= $50,000 in einem Trade
 Bedingung 2: Bid-Dominanz haelt ueber viele Orderbuch-Snapshots an
 Bedingung 3: Aggressives Kaufvolumen schlaegt Verkaufsvolumen (>= 1.6x)
 Bedingung 4: Der Preis tickt im Sekundenfenster bereits nach oben
-Bedingung 5: Spread eng genug, Buch tief genug
+Bedingung 5: Die Bid-Wand bleibt bestehen; keine Spoofing-Warnung
+Bedingung 6: Spread eng genug, Buch tief genug und Zielbewegung erreichbar
     ────────────────────────────────────────────────
     → Market-BUY + Take-Profit / Stop-Loss / Trailing / Zeit-Exit
 ```
 
-Die Strategie ist ereignisgetrieben: Ein Whale-Buy wird unmittelbar in eine interne Queue geschrieben und dann bewertet. Die tatsaechliche End-to-End-Latenz haengt von Binance-WebSockets, Netzwerk, REST-API und Ausfuehrung ab; sie ist nicht garantiert.
+Die Strategie ist ereignisgetrieben: Ein Whale-Buy wird unmittelbar in eine interne Queue geschrieben und dann bewertet. Preise, Trades und Orderbuchdaten stammen aus Binance-WebSockets. Im Orderpfad wird der aktuelle WebSocket-Preis verwendet; Binance-REST bleibt fuer die signierte Live-Order sowie beim ersten Auftreten eines Paars fuer die zwischengespeicherten Handelsregeln notwendig. Die tatsaechliche End-to-End-Latenz ist nicht garantiert.
 
 ## 2. Marktueberwachung
 
@@ -122,8 +123,11 @@ Bedingung: 24h-Volumen >= $5,000,000
            Spread <= SCALP_MAX_SPREAD_BPS (Standard 5 bps)
            Bid-Tiefe >= SCALP_MIN_BID_DEPTH_USDT (Standard $25,000)
            24h-Change >= SCALP_REGIME_MAX_DROP_PCT (Standard -5%)
+           erwartete Bewegung in der Haltedauer >= Take-Profit + Kosten
 Warum: Enger Spread und echte Tiefe entscheiden beim Scalping ueber die Kosten.
        Der 24h-Wert dient nur noch als grober Crash-Schutz, nicht als Trendsignal.
+       Stablecoin-Paare wie USDC/USDT werden ausgeschlossen, weil sie das Ziel
+       nach Kosten nicht erreichen koennen.
 ```
 
 ### G2 — Whale Buy Signal (löst Event aus)
@@ -137,13 +141,26 @@ Bedingung: Einzelner aggTrade >= $50,000 USDT
 ```
 Bedingung: >= SCALP_MIN_PERSISTENCE der Snapshots im Fenster bid-dominant
            mindestens SCALP_MIN_BOOK_SAMPLES Snapshots vorhanden
+        Bid-Wand nicht mehr als SCALP_MAX_WALL_PULL_PCT geschrumpft
 Warum: Ein einzelner Snapshot ist wertlos, weil Limit-Orders sofort verschwinden
        koennen. Nur anhaltende Bid-Dominanz zaehlt als Kaufdruck.
+```
+
+### Absorption und Wall-Pull
+```
+Absorption: Viele aggressive Verkaeufe treffen auf eine stabile Bid-Wand,
+         aber der Preis faellt nicht. Das deutet auf einen grossen passiven
+         Kaeufer hin und kann schwachen Kauf-Flow bei G4 bestaetigen.
+
+Wall-Pull:  Die Bid-Tiefe faellt gegenueber ihrem Hoechstwert im Zeitfenster
+         stark ab. Das deutet auf eine zurueckgezogene Kaufmauer bzw.
+         Spoofing hin; der Bot lehnt den Kauf ab.
 ```
 
 ### G4 — Aggressiver Flow und Momentum
 ```
 Bedingung: Kaufvolumen / Verkaufsvolumen >= SCALP_MIN_FLOW_RATIO (1.6x)
+           oder bestaetigte Absorption
            Momentum im Fenster zwischen +0.05% und +1.5%
            mindestens 10 Trades im Fenster
 Warum: Der Bot will echten Taker-Kaufdruck sehen und nicht einer Bewegung
@@ -166,6 +183,8 @@ Trailing:       ab +SCALP_TRAIL_ACTIVATE_PCT Gewinn, Ausstieg nach
 Zeit-Exit:      nach SCALP_MAX_HOLD_SEC (Standard 300s)
 ```
 
+Die Ziel-Erreichbarkeit wird aus der echten Preisspanne im `SCALP_FLOW_WINDOW_SEC`-Fenster auf die maximale Haltedauer hochgerechnet. Das ist ein Kosten-/Volatilitaetsfilter, keine Kursprognose.
+
 Die Paper-Simulation zieht Handelskosten ab:
 `2 x BINANCE_TAKER_FEE_PCT + 2 x SCALP_SLIPPAGE_BPS`. Bei Standardwerten sind das rund `0.24%` pro Round-Trip. Liegt das Take-Profit-Ziel darunter, warnt der Bot beim Start, weil dann selbst Gewinntrades netto verlieren.
 
@@ -179,7 +198,8 @@ Symbol:        XRPUSDT
 Einstieg:      $2.4100 (Marktpreis zum Zeitpunkt des Signals)
 Position:      $10 USDT (konfigurierbar)
 Menge:         10 / 2.41 = 4.149 XRP (gerundet auf Lot-Size)
-Ausfuehrung:   Market-Order im Live-Modus; im Paper-Modus nur lokale Simulation
+Ausfuehrung:   Marktpreis aus dem Live-WebSocket; Market-Order im Live-Modus,
+               lokale Simulation im Paper-Modus
 ```
 
 ### Automatischer Exit (OCO = One-Cancels-Other)
@@ -193,7 +213,7 @@ Risk/Reward:   1 : 0.75
 Im Live-Modus wird eine OCO-Verkaufsorder an Binance gesendet. Erreicht eine Teilorder das Ziel, soll Binance die andere stornieren.
 ```
 
-Im Paper-Modus wird kein Auftrag an Binance gesendet. Der Bot simuliert den Kauf und ueberwacht danach den Live-Preis: Bei Take-Profit oder Stop-Loss wird ein simulierter Verkauf mit PnL in `binance_orderflow.db` gespeichert und die Position aus `positions.json` entfernt. Das Dashboard zeigt offene Paper-Positionen sowie simulierte Kaeufe und Verkaeufe.
+Im Paper-Modus wird kein Auftrag an Binance gesendet. Der Bot simuliert den Kauf und ueberwacht danach den Live-Preis. Bei Take-Profit, Stop-Loss, Trailing-Stop oder Zeitlimit wird ein simulierter Verkauf mit PnL in `binance_orderflow.db` gespeichert und die Position aus `positions.json` entfernt. Das Dashboard zeigt die verwendeten Gates, offene Paper-Positionen sowie simulierte Kaeufe und Verkaeufe.
 
 ## 5. Vor- und Nachteile
 
@@ -201,16 +221,18 @@ Im Paper-Modus wird kein Auftrag an Binance gesendet. Der Bot simuliert den Kauf
 
 - Oeffentliche Echtzeitdaten: Fuer Monitoring und Paper-Modus ist kein API-Key noetig.
 - Der Bot begrenzt sich auf liquide USDT-Spot-Paare und eine konfigurierbare Zahl paralleler Positionen.
-- Aggressiver Kauf, sichtbare Book-Imbalance und Trendfilter muessen gemeinsam vorliegen.
+- Aggressiver Kauf, persistente Book-Imbalance, Wall-Pull-Schutz und kurzfristiger Flow muessen gemeinsam vorliegen.
+- Absorption kann echten passiven Kaufdruck sichtbar machen, wenn aggressive Verkaeufer den Preis nicht druecken koennen.
+- Der aktuelle Preis wird aus dem WebSocket genutzt; keine REST-Preisabfrage im Orderpfad.
 - Eine erfolgreich angelegte OCO-Order kann im Live-Modus Gewinnziel und Verlustbegrenzung abbilden.
 - Das Dashboard macht Verbindung, Signale, Kandidaten und Marktdaten sichtbar.
 
 ### Nachteile und Risiken
 
-- Sichtbare Limit-Orders koennen vor der Ausfuehrung zurueckgezogen werden. Eine Imbalance ist kein verlaesslicher Preisindikator.
+- Sichtbare Limit-Orders koennen vor der Ausfuehrung zurueckgezogen werden. Wall-Pull senkt dieses Risiko, beseitigt es aber nicht.
 - Ein fester Whale-Schwellenwert ist fuer sehr liquide Paare weniger aussagekraeftig als fuer kleinere Paare.
 - Market-Orders koennen Slippage und Gebuehren verursachen; die Paper-Simulation bildet beides nicht ab.
-- Der 24h-Trend ist ein grober Filter und schuetzt nicht vor kurzfristigen Umkehrungen.
+- Der 24h-Wert ist nur ein grober Crash-Filter und schuetzt nicht vor kurzfristigen Umkehrungen.
 - Es gibt keine automatische Positions- oder OCO-Reconciliation. Schlaegt das Anlegen einer OCO-Order fehl, kann eine ungesicherte Spot-Position bestehen bleiben.
 - Die Strategie ist im Repository nicht historisch gegen Gebuehren, Slippage und verschiedene Marktphasen validiert.
 
@@ -243,6 +265,20 @@ IMBALANCE_RATIO=1.5             # Min. Bid/Ask-Ratio für G3
 BN_MIN_VOLUME_24H=5000000       # Min. 24h-Volumen ($5M)
 TOP_PAIRS=20                    # Wie viele Paare für aggTrade/depth
 SIGNAL_TTL=30.0                 # Wie lange ist ein Signal gültig (s)
+
+# ── Kurzfristiger Orderflow ───────────────────────────────
+SCALP_FLOW_WINDOW_SEC=30        # Analysefenster fuer Flow und Momentum
+SCALP_MIN_FLOW_RATIO=1.6        # Mindest-Kauf-/Verkaufsvolumen
+SCALP_MIN_PERSISTENCE=0.6       # Anteil bid-dominanter Buch-Snapshots
+SCALP_MIN_BOOK_SAMPLES=5        # Mindestzahl Buch-Snapshots
+SCALP_MAX_WALL_PULL_PCT=40      # Maximales Schrumpfen der Bid-Wand
+SCALP_MAX_SPREAD_BPS=5          # Maximaler Spread in Basispunkten
+SCALP_MIN_BID_DEPTH_USDT=25000  # Mindesttiefe der besten 5 Bids
+SCALP_MAX_HOLD_SEC=300          # Zeit-Exit nach 5 Minuten
+SCALP_TRAIL_ACTIVATE_PCT=0.8    # Trailing-Stop ab diesem Gewinn
+SCALP_TRAIL_GIVEBACK_PCT=0.4    # Maximaler Ruecklauf vom Hoch
+BINANCE_TAKER_FEE_PCT=0.1       # Annahme je Seite fuer Paper-PnL
+SCALP_SLIPPAGE_BPS=2            # Annahme je Seite fuer Paper-PnL
 ```
 
 ---
@@ -258,8 +294,7 @@ python3 main.py
 
 **Normale Console-Ausgabe:**
 ```
-Binance Order Flow Bot — Event-Driven Whale + Book Imbalance
-⚡ Mode: EVENT-DRIVEN (reacts within milliseconds of whale trade)
+Binance Short-Term Order Flow Scalper
 ═══════════════════════════════════════════════════════════════
 [ORDERFLOW] Warming up streams (10s)...
 [ORDERFLOW] ✅ Mini-ticker connected (284 Paare)
@@ -269,10 +304,10 @@ Binance Order Flow Bot — Event-Driven Whale + Book Imbalance
 ── Status #1 | Tickers:284 | Pairs:20 | Signals:8 | Positions:0/10 ──
 
 [ORDERFLOW] 🐋 BUY XRPUSDT | $186,746 @ $2.41
-[XRPUSDT] 🐳+G2✔ 📗+G3✔ G4✖ | Whale BUY $186k | Book 6.4x | Trend: Downtrend -0.3%
+[XRPUSDT] G2✔ G3✔ G4✖ | Book bid-dominant 77% | Buy flow 1.36x < 1.60x
 
 [ORDERFLOW] 🐋 BUY SOLUSDT | $95,200 @ $142.30
-[SOLUSDT] ✅ ALL GATES | Price:$142.3000 | Whale BUY $95k | Book 3.1x | Uptrend: +2.1%
+[SOLUSDT] ✅ ALL GATES | Price:$142.3000 | Whale BUY $95k | Book bid-dominant 80% | Flow 2.1x
 [EXECUTOR] 📝 DRY-RUN MARKET BUY | SOLUSDT | qty=0.070289 | price≈$142.30 | total≈$10.00
 [EXECUTOR] 📝 DRY-RUN OCO | SOLUSDT | TP=$144.43 | SL=$139.45
 ```

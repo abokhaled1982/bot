@@ -83,6 +83,7 @@ class BinanceOrderFlowAdapter:
         # Rolling trade prices and book imbalance history for short-term scalping metrics
         self._trade_prices: dict[str, deque] = defaultdict(lambda: deque(maxlen=2000))
         self._book_ratios:  dict[str, deque] = defaultdict(lambda: deque(maxlen=600))
+        self._bid_depth:    dict[str, deque] = defaultdict(lambda: deque(maxlen=600))
 
         # Track subscribed pairs
         self._subscribed_pairs: list[str] = []
@@ -115,6 +116,13 @@ class BinanceOrderFlowAdapter:
         if len(prices) >= 2 and prices[0][1] > 0:
             momentum_pct = (prices[-1][1] / prices[0][1] - 1) * 100
 
+        range_pct = 0.0
+        if prices:
+            values = [price for _, price in prices]
+            mid = sum(values) / len(values)
+            if mid > 0:
+                range_pct = (max(values) - min(values)) / mid * 100
+
         buy_usd = sum(value for ts, value in self._buy_vol.get(symbol, ()) if ts >= cutoff)
         sell_usd = sum(value for ts, value in self._sell_vol.get(symbol, ()) if ts >= cutoff)
         flow_ratio = buy_usd / sell_usd if sell_usd > 0 else (float("inf") if buy_usd > 0 else 0.0)
@@ -125,16 +133,31 @@ class BinanceOrderFlowAdapter:
         )
 
         book = self._books.get(symbol, {})
+        current_bid = book.get("bid_vol", 0.0)
+
+        # A wall that vanishes was bait, not real demand.
+        depths = [depth for ts, depth in self._bid_depth.get(symbol, ()) if ts >= cutoff]
+        peak_bid = max(depths) if depths else 0.0
+        wall_pull_pct = ((peak_bid - current_bid) / peak_bid * 100) if peak_bid > 0 else 0.0
+
+        # Sellers hitting a bid that holds means someone is quietly buying.
+        absorption_ratio = sell_usd / current_bid if current_bid > 0 else 0.0
+        absorbed = absorption_ratio >= 0.5 and momentum_pct >= 0 and wall_pull_pct < 20
+
         return {
             "momentum_pct":   momentum_pct,
+            "range_pct":      range_pct,
             "trade_count":    len(prices),
             "buy_usd":        buy_usd,
             "sell_usd":       sell_usd,
             "flow_ratio":     flow_ratio,
             "book_persistence": persistence,
             "book_samples":   len(ratios),
+            "wall_pull_pct":  wall_pull_pct,
+            "absorption_ratio": absorption_ratio,
+            "absorbed":       absorbed,
             "spread_bps":     book.get("spread_bps", float("inf")),
-            "bid_vol":        book.get("bid_vol", 0.0),
+            "bid_vol":        current_bid,
             "book_age_sec":   now - book.get("updated_at", 0) if book else float("inf"),
         }
 
@@ -366,6 +389,7 @@ class BinanceOrderFlowAdapter:
 
         ratio = bid_vol / ask_vol
         self._book_ratios[sym].append((now, ratio))
+        self._bid_depth[sym].append((now, bid_vol))
 
         if ratio >= IMBALANCE_RATIO:
             sig = OrderFlowSignal(

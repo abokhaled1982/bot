@@ -40,6 +40,7 @@ MAX_MOMENTUM_PCT  = float(os.getenv("SCALP_MAX_MOMENTUM_PCT",  "1.50"))
 MIN_FLOW_RATIO    = float(os.getenv("SCALP_MIN_FLOW_RATIO",    "1.6"))
 MIN_PERSISTENCE   = float(os.getenv("SCALP_MIN_PERSISTENCE",   "0.6"))
 MIN_BOOK_SAMPLES  = int(os.getenv("SCALP_MIN_BOOK_SAMPLES",    "5"))
+MAX_WALL_PULL_PCT = float(os.getenv("SCALP_MAX_WALL_PULL_PCT", "40"))
 MAX_SPREAD_BPS    = float(os.getenv("SCALP_MAX_SPREAD_BPS",    "5"))
 MIN_BID_DEPTH     = float(os.getenv("SCALP_MIN_BID_DEPTH_USDT", "25000"))
 MAX_HOLD_SEC      = float(os.getenv("SCALP_MAX_HOLD_SEC",      "300"))
@@ -50,10 +51,21 @@ TAKER_FEE_PCT     = float(os.getenv("BINANCE_TAKER_FEE_PCT",   "0.1"))
 SLIPPAGE_BPS      = float(os.getenv("SCALP_SLIPPAGE_BPS",      "2"))
 ROUND_TRIP_COST   = 2 * TAKER_FEE_PCT + (2 * SLIPPAGE_BPS / 100)
 
+# Pegged pairs cannot move far enough to cover trading costs.
+STABLE_ASSETS = {"USDC", "FDUSD", "TUSD", "BUSD", "DAI", "USDP", "EUR", "RLUSD", "USD1", "XUSD"}
+
 
 # ── Gate functions ────────────────────────────────────────────────────────────
 
+def expected_move_pct(metrics: dict) -> float:
+    """Scale the observed short-term range to the hold period (random-walk approximation)."""
+    return metrics.get("range_pct", 0.0) * (MAX_HOLD_SEC / FLOW_WINDOW_SEC) ** 0.5
+
 def gate1_liquidity(ticker: dict, metrics: dict) -> tuple[bool, str]:
+    symbol = ticker.get("symbol", "")
+    if symbol.removesuffix("USDT") in STABLE_ASSETS:
+        return False, "Pegged pair"
+
     vol = ticker.get("volume_24h", 0)
     age = time.time() - ticker.get("updated_at", 0)
     if vol < MIN_VOLUME_24H:
@@ -66,7 +78,14 @@ def gate1_liquidity(ticker: dict, metrics: dict) -> tuple[bool, str]:
         return False, f"Spread {metrics['spread_bps']:.1f}bps > {MAX_SPREAD_BPS:.1f}"
     if metrics["bid_vol"] < MIN_BID_DEPTH:
         return False, f"Thin book: ${metrics['bid_vol']:,.0f}"
-    return True, f"Vol ${vol/1e6:.0f}M | spread {metrics['spread_bps']:.1f}bps"
+
+    reachable = expected_move_pct(metrics)
+    if reachable < TAKE_PROFIT_PCT + ROUND_TRIP_COST:
+        return False, (
+            f"Target unreachable: ~{reachable:.2f}% moeglich in {MAX_HOLD_SEC:.0f}s, "
+            f"noetig {TAKE_PROFIT_PCT + ROUND_TRIP_COST:.2f}%"
+        )
+    return True, f"Vol ${vol/1e6:.0f}M | spread {metrics['spread_bps']:.1f}bps | Bewegung ~{reachable:.2f}%"
 
 
 def gate2_whale_signal(symbol: str, adapter: BinanceOrderFlowAdapter) -> tuple[bool, str]:
@@ -79,19 +98,25 @@ def gate2_whale_signal(symbol: str, adapter: BinanceOrderFlowAdapter) -> tuple[b
 
 
 def gate3_book_pressure(metrics: dict) -> tuple[bool, str]:
-    """Bid dominance must hold across many snapshots, not just one."""
+    """Bid dominance must hold across many snapshots and the wall must not vanish."""
     if metrics["book_samples"] < MIN_BOOK_SAMPLES:
         return False, f"Only {metrics['book_samples']} book samples"
     if metrics["book_persistence"] < MIN_PERSISTENCE:
         return False, f"Imbalance unstable: {metrics['book_persistence']*100:.0f}%"
-    return True, f"Book bid-dominant {metrics['book_persistence']*100:.0f}% of {metrics['book_samples']} snaps"
+    if metrics["wall_pull_pct"] > MAX_WALL_PULL_PCT:
+        return False, f"Bid wall pulled: -{metrics['wall_pull_pct']:.0f}% (Spoofing-Verdacht)"
+
+    note = f"Book bid-dominant {metrics['book_persistence']*100:.0f}% of {metrics['book_samples']} snaps"
+    if metrics.get("absorbed"):
+        note += f" | Absorption {metrics['absorption_ratio']:.2f}x"
+    return True, note
 
 
 def gate4_flow_momentum(metrics: dict) -> tuple[bool, str]:
-    """Aggressive buyers must dominate and price must already tick up."""
+    """Aggressive buyers must dominate, unless sellers are being absorbed at a firm bid."""
     if metrics["trade_count"] < 10:
         return False, f"Too few trades: {metrics['trade_count']}"
-    if metrics["flow_ratio"] < MIN_FLOW_RATIO:
+    if metrics["flow_ratio"] < MIN_FLOW_RATIO and not metrics.get("absorbed"):
         return False, f"Buy flow {metrics['flow_ratio']:.2f}x < {MIN_FLOW_RATIO:.2f}x"
     if metrics["momentum_pct"] < MIN_MOMENTUM_PCT:
         return False, f"Momentum {metrics['momentum_pct']:+.3f}% < {MIN_MOMENTUM_PCT:.3f}%"
@@ -239,8 +264,8 @@ async def evaluate_candidate(
         f"[{symbol}] ✅ ALL GATES | Price:${price:.4f} | {g2_reason} | {g3_reason} | {g4_reason}"
     )
 
-    # Place market buy
-    order = place_market_buy(symbol, POSITION_SIZE)
+    # Place market buy using the live WebSocket price (no REST lookup in the hot path)
+    order = place_market_buy(symbol, POSITION_SIZE, price)
     if not order:
         logger.error(f"[{symbol}] Order placement failed")
         return False

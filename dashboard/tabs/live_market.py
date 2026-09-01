@@ -209,12 +209,17 @@ def render():
                 "Flow": metrics["flow_ratio"],
                 "Momentum": metrics["momentum_pct"],
                 "Spread": metrics["spread_bps"],
+                "Wand weg": metrics["wall_pull_pct"],
+                "Absorption": "JA" if metrics.get("absorbed") else "-",
             })
 
         if decision_rows:
             decisions = pd.DataFrame(decision_rows)
             st.dataframe(
-                decisions.style.format({"Flow": "{:.2f}x", "Momentum": "{:+.3f}%", "Spread": "{:.1f} bps"}),
+                decisions.style.format({
+                    "Flow": "{:.2f}x", "Momentum": "{:+.3f}%",
+                    "Spread": "{:.1f} bps", "Wand weg": "-{:.0f}%",
+                }),
                 width="stretch",
                 hide_index=True,
                 height=360,
@@ -224,9 +229,12 @@ def render():
             st.markdown(
                 "**G1 Markt:** Das Paar muss handelbar sein: enger Spread, genug Buchtiefe und kein starker Tagescrash.  \n"
                 "**G2 Whale:** Ein grosser aggressiver Kauf ist gerade passiert.  \n"
-                "**G3 Buch:** Die Kaufseite des Orderbooks war nicht nur einmal, sondern wiederholt staerker.  \n"
+                "**G3 Buch:** Die Kaufseite des Orderbooks war nicht nur einmal, sondern wiederholt staerker "
+                "und die grossen Kauforders sind nicht ploetzlich verschwunden.  \n"
                 "**G4 Flow:** In den letzten 30 Sekunden ueberwiegen Marktkaeufe und der Preis steigt leicht.  \n"
-                "**G5 Risiko:** Es gibt noch Platz im Positionslimit und das Paar ist noch nicht offen."
+                "**G5 Risiko:** Es gibt noch Platz im Positionslimit und das Paar ist noch nicht offen.  \n\n"
+                "**Wand weg:** Wie stark die groesste Kaufmauer geschrumpft ist. Viel Schwund deutet auf Koeder hin.  \n"
+                "**Absorption:** Verkaeufer druecken in den Markt, aber der Kurs haelt — jemand kauft still auf."
             )
 
         if signals:

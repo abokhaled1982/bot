@@ -57,15 +57,23 @@ def get_account_balance(asset: str = "USDT") -> float:
     return 0.0
 
 
+_SYMBOL_INFO_CACHE: dict[str, tuple[float, dict]] = {}
+_SYMBOL_INFO_TTL = 3600.0
+
+
 def get_symbol_info(symbol: str) -> dict:
-    """Fetch symbol filters (lot size, min notional, tick size)."""
+    """Fetch symbol filters, cached because exchange rules rarely change."""
+    cached = _SYMBOL_INFO_CACHE.get(symbol)
+    if cached and time.time() - cached[0] < _SYMBOL_INFO_TTL:
+        return cached[1]
+
     try:
         r = requests.get(f"{BASE_URL}/api/v3/exchangeInfo?symbol={symbol}", timeout=8)
         data = r.json()
         for s in data.get("symbols", []):
             if s["symbol"] == symbol:
                 filters = {f["filterType"]: f for f in s["filters"]}
-                return {
+                info = {
                     "minQty":       float(filters.get("LOT_SIZE", {}).get("minQty", 0)),
                     "stepSize":     float(filters.get("LOT_SIZE", {}).get("stepSize", 0)),
                     "minNotional":  float(filters.get("MIN_NOTIONAL", {}).get("minNotional", 5)),
@@ -73,6 +81,8 @@ def get_symbol_info(symbol: str) -> dict:
                     "baseAsset":    s.get("baseAsset", ""),
                     "quoteAsset":   s.get("quoteAsset", ""),
                 }
+                _SYMBOL_INFO_CACHE[symbol] = (time.time(), info)
+                return info
     except Exception as e:
         logger.error(f"[EXECUTOR] Symbol info error: {e}")
     return {}
@@ -88,20 +98,19 @@ def _round_step(value: float, step: float) -> float:
     return float(units * decimal_step)
 
 
-def place_market_buy(symbol: str, usdt_amount: float) -> dict | None:
+def place_market_buy(symbol: str, usdt_amount: float, price: float | None = None) -> dict | None:
     """
     Place a market BUY order for `usdt_amount` USDT worth of `symbol`.
-    Returns order response dict or None on failure.
+    `price` should come from the live WebSocket feed; REST is only a fallback.
     """
-    # Fetch current price
-    try:
-        r = requests.get(f"{BASE_URL}/api/v3/ticker/price?symbol={symbol}", timeout=5)
-        price = float(r.json()["price"])
-    except Exception as e:
-        logger.error(f"[EXECUTOR] Price fetch failed: {e}")
-        return None
+    if price is None or price <= 0:
+        try:
+            r = requests.get(f"{BASE_URL}/api/v3/ticker/price?symbol={symbol}", timeout=5)
+            price = float(r.json()["price"])
+        except Exception as e:
+            logger.error(f"[EXECUTOR] Price fetch failed: {e}")
+            return None
 
-    # Get symbol filters
     info = get_symbol_info(symbol)
     step = info.get("stepSize", 0)
     min_qty  = info.get("minQty", 0)
