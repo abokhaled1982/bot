@@ -28,6 +28,7 @@ LAYOUT
 from __future__ import annotations
 
 import datetime as _dt
+import importlib
 import json
 import os
 import time
@@ -213,21 +214,26 @@ def _tracking_badge(track: dict | None, bot_alive: bool) -> tuple[str, str]:
 
 # ── Adapter (nur Steuerung + Scanner, kein Tracking) ─────────────────────────
 
+_ADAPTER_SCHEMA_VERSION = 3
+
+
 @st.cache_resource
-def _get_adapter():
+def _get_adapter(schema_version: int):
     """Adapter-Instanz OHNE `start()`.
 
     Das Tracking gehört dem Bot-Prozess. Würde das Dashboard einen zweiten
     Tracker starten, hätte man doppelte API-Last und zwei Wahrheiten.
     """
-    from src.adapters.hyperliquid_copytrader import HyperliquidCopyTrader
-    return HyperliquidCopyTrader(publish_state=False)
+    del schema_version
+    from src.adapters import hyperliquid_copytrader
+    module = importlib.reload(hyperliquid_copytrader)
+    return module.HyperliquidCopyTrader(publish_state=False)
 
 
 # ── Entry ────────────────────────────────────────────────────────────────────
 
 def render():
-    adapter = _get_adapter()
+    adapter = _get_adapter(_ADAPTER_SCHEMA_VERSION)
     adapter.refresh()
 
     st.markdown('<h2 style="margin-bottom:0;">🔄 Hyperliquid Copy-Trader</h2>',
@@ -533,6 +539,18 @@ def _trader_header(trader: dict, short: str, track: dict | None, bot_alive: bool
     state = ('<span class="badge-profit">🟢 KOPIERT</span>' if trader["is_copied"]
              else '<span class="badge-info">👁 NUR BEOBACHTET</span>')
     badge, badge_sub = _tracking_badge(track, bot_alive)
+    verification = trader_store.get_verification(trader["wallet"])
+    if verification:
+        verification_age = time.time() - float(verification["verified_at"])
+        score = float(verification["quality_score"])
+        if verification_age <= 7 * 86400:
+            verified_badge = (
+                f'<span class="badge-profit">✅ VERIFIZIERT {score:.1f}</span>'
+            )
+        else:
+            verified_badge = '<span class="badge-warn">⚠️ PRÜFUNG ÄLTER ALS 7T</span>'
+    else:
+        verified_badge = '<span class="badge-warn">⚠️ NICHT VERIFIZIERT</span>'
 
     size = float(trader["size_usdt"] or 0) or _default_size()
     amount_sub = "eigener Betrag" if trader["size_usdt"] else "Standard aus .env"
@@ -543,7 +561,7 @@ def _trader_header(trader: dict, short: str, track: dict | None, bot_alive: bool
         '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
         'margin-bottom:6px">'
         f'<span style="font-family:JetBrains Mono,monospace;font-size:1.05rem;'
-        f'font-weight:600">{short}</span>{pin}{state}{badge}</div>',
+        f'font-weight:600">{short}</span>{pin}{state}{verified_badge}{badge}</div>',
         unsafe_allow_html=True,
     )
     h1, h2, h3, h4, h5 = st.columns(5)
@@ -707,6 +725,17 @@ def _tab_tracking(wallet: str, track: dict | None, bot_alive: bool) -> None:
     if track.get("poll_error"):
         st.error(f"Letzter Poll-Fehler: {track['poll_error']}")
 
+    if track.get("is_copied") and ws_ok:
+        if int(track.get("signal_count", 0)) == 0:
+            st.success(
+                "Copy-Pipeline ist bereit. Der Ausgangszustand wurde eingelesen; "
+                "der Bot wartet auf die nächste neue Long-Eröffnung oder eine "
+                "Long-Erhöhung über 5 %. Bereits offene Trader-Positionen werden "
+                "nicht nachträglich gekauft."
+            )
+        else:
+            st.success("Copy-Pipeline ist aktiv und hat bereits Signale verarbeitet.")
+
     st.caption(
         f"Zuletzt vom Bot aktualisiert: "
         f"{_fmt_age(now - float(track.get('updated_at') or now))} · "
@@ -857,10 +886,35 @@ def _tab_trader_detail(adapter, wallet: str, live_positions: dict) -> None:
 
 
 def _tab_verify(wallet: str) -> None:
+    verification = trader_store.get_verification(wallet)
+    if verification:
+        metrics = verification["metrics"]
+        verified_at = _dt.datetime.fromtimestamp(
+            verification["verified_at"]
+        ).strftime("%d.%m.%Y %H:%M")
+        st.markdown(f"**Quantitative Verifikation vom {verified_at}**")
+        v1, v2, v3, v4, v5 = st.columns(5)
+        v1.metric("Quality-Score", f"{verification['quality_score']:.1f}/100")
+        v2.metric("Profit-Faktor", f"{float(metrics.get('profit_factor', 0)):.2f}")
+        v3.metric("Long-PF", f"{float(metrics.get('long_profit_factor', 0)):.2f}")
+        v4.metric("Drawdown-Proxy", f"{float(metrics.get('max_drawdown_pct', 0)):.1f}%")
+        v5.metric("PnL 30 Tage", f"${float(metrics.get('month_pnl', 0)):+,.0f}")
+        st.caption(
+            f"{int(metrics.get('trades', 0))} geschlossene Trades · "
+            f"{int(metrics.get('long_trades', 0))} Long-Trades · "
+            f"{float(metrics.get('win_rate', 0)):.0%} Win-Rate · "
+            f"{int(metrics.get('active_days', 0))} aktive Tage · "
+            f"Ø {_fmt_hold(float(metrics.get('avg_hold_sec', 0)))} Haltedauer"
+        )
+    else:
+        st.warning(
+            "Für diese Wallet liegt kein Scanner-Verifikationsbefund vor. "
+            "Manuell hinzugefügte Trader gelten nicht als verifiziert."
+        )
+
     st.caption(
-        "Hyperliquid zeigt selbst wenig Details. Diese Explorer liefern PnL-Kurven "
-        "und Charts pro Coin. Ändert ein Anbieter seinen URL-Pfad, kommt ein 404 — "
-        "dann die Adresse unten manuell dort suchen."
+        "Externe Explorer dienen als unabhängige Gegenprüfung der öffentlichen "
+        "Wallet-Daten. Quantitative Verifikation garantiert keine zukünftigen Gewinne."
     )
     html = " · ".join(
         f'<a href="{url}" target="_blank" style="text-decoration:none">'
@@ -879,23 +933,32 @@ def _render_scanner(adapter):
     st.markdown('<div class="section-header">🔍 Passenden Trader finden</div>',
                 unsafe_allow_html=True)
     st.caption(
-        "Alle Kennzahlen beziehen sich auf **das gewählte Zeitfenster**, nicht auf "
-        "Lifetime. Der Scan ist wegen des HL-Rate-Limits auf ~2s pro Kandidat gedrosselt."
+        "Es erscheinen nur quantitativ verifizierte Wallets. Das ist eine Prüfung "
+        "der öffentlichen Handelsdaten, keine Identitätsprüfung der Person. "
+        "Ranking-PnL folgt dem gewählten Fenster; alle Qualitäts-Gates nutzen 30 Tage."
+    )
+    st.info(
+        "Verifikations-Gates: mindestens 30 geschlossene Trades, 5 aktive Tage, "
+        "45 % Win-Rate, Profit-Faktor 1,30, Long-Profit-Faktor 1,20, mindestens "
+        "10 Long-Trades mit positivem aggregiertem Long-PnL, maximal 15 % "
+        "Drawdown-Proxy, "
+        "positive 7T/30T-Performance und kopierbare Haltedauer."
     )
 
     with st.form("scanner_form"):
         c1, c2, c3, c4 = st.columns(4)
-        window = c1.selectbox("Zeitfenster", LEADERBOARD_WINDOWS, index=0,
+        window = c1.selectbox("Ranking-Zeitraum", LEADERBOARD_WINDOWS, index=2,
                               format_func=lambda w: _WINDOW_LABEL.get(w, w))
-        min_win_rate = c2.slider("Min. Win-Rate %", 0, 100, 55) / 100
-        min_trades = c3.number_input("Min. Trades", min_value=0, value=20, step=5)
-        max_hold_min = c4.number_input("Max. Ø Hold (min)", min_value=0, value=60, step=5)
+        min_win_rate = c2.slider("Min. Win-Rate %", 45, 80, 50) / 100
+        min_trades = c3.number_input("Min. Trades (30T)", min_value=30, value=50, step=10)
+        max_hold_min = c4.number_input("Max. Ø Hold (h)", min_value=1, value=24, step=1)
 
         c5, c6 = st.columns(2)
         min_account = c5.number_input("Min. Account-Wert ($)", min_value=0,
-                                      value=10000, step=5000)
-        limit = c6.slider("Kandidaten prüfen", 5, 60, 20)
-        submitted = st.form_submit_button("🔎 Suchen", type="primary", width="stretch")
+                                      value=25000, step=5000)
+        limit = c6.slider("Top-Kandidaten verifizieren", 10, 60, 40, step=10)
+        submitted = st.form_submit_button("🔎 Verifizierte Trader suchen", type="primary",
+                                          width="stretch")
 
     if submitted:
         bar = st.progress(0.0)
@@ -909,8 +972,10 @@ def _render_scanner(adapter):
             results = adapter.list_leaderboard(
                 window=window, limit=limit,
                 min_trades=min_trades, min_win_rate=min_win_rate,
-                max_avg_hold_sec=max_hold_min * 60 if max_hold_min else None,
+                min_avg_hold_sec=120,
+                max_avg_hold_sec=max_hold_min * 3600 if max_hold_min else None,
                 min_account_value=min_account,
+                verified_only=False,
                 progress_cb=_progress,
             )
         except Exception as e:
@@ -920,28 +985,61 @@ def _render_scanner(adapter):
             return
         bar.empty()
         note.empty()
-        st.session_state["scan_results"] = results
+        st.session_state["scan_results"] = [
+            result for result in results if result["verified"]
+        ]
+        st.session_state["scan_rejected"] = [
+            result for result in results if not result["verified"]
+        ]
         st.session_state["scan_window"] = window
         st.session_state["scan_ts"] = _dt.datetime.now().strftime("%H:%M:%S")
 
     results = list(st.session_state.get("scan_results", []))
     if not results:
         if submitted:
-            st.info("Kein Trader erfüllt diese Filter. Senke die Schwellwerte oder "
-                    "wähle ein breiteres Zeitfenster.")
+            rejected = list(st.session_state.get("scan_rejected", []))
+            st.warning(
+                f"Kein Trader vollständig verifiziert. {len(rejected)} Kandidaten "
+                "wurden quantitativ geprüft und abgelehnt."
+            )
+            if rejected:
+                reason_counts: dict[str, int] = {}
+                for candidate in rejected:
+                    for reason in candidate["verification_reasons"]:
+                        category = reason.split(" ", 1)[0]
+                        reason_counts[category] = reason_counts.get(category, 0) + 1
+                common = sorted(reason_counts.items(), key=lambda item: item[1], reverse=True)
+                st.caption(
+                    "Häufigste Ausschlussgründe: "
+                    + " · ".join(f"{name}: {count}" for name, count in common[:5])
+                )
+                with st.expander("Warum wurden die besten Kandidaten abgelehnt?"):
+                    st.dataframe(
+                        pd.DataFrame([{
+                            "Trader": _short(candidate["wallet"]),
+                            "Score": candidate["quality_score"],
+                            "Gründe": " · ".join(candidate["verification_reasons"]),
+                        } for candidate in rejected[:10]]),
+                        width="stretch", hide_index=True,
+                    )
         return
 
     sort_by = st.selectbox(
         "Sortieren nach",
-        ["PnL (Fenster)", "Win-Rate", "Volumen (Liquidität)", "Trades", "Account-Wert"],
+        ["Quality-Score", "Long Profit-Faktor", "Profit-Faktor", "Niedrigster Drawdown",
+         "PnL (Fenster)", "Win-Rate", "Trades"],
         key="scan_sort",
     )
     sort_key = {
+        "Quality-Score": "quality_score",
+        "Long Profit-Faktor": "long_profit_factor",
+        "Profit-Faktor": "profit_factor",
+        "Niedrigster Drawdown": "max_drawdown_pct",
         "PnL (Fenster)": "window_pnl", "Win-Rate": "win_rate",
-        "Volumen (Liquidität)": "window_volume", "Trades": "trades",
-        "Account-Wert": "account_value",
+        "Trades": "trades",
     }[sort_by]
-    results.sort(key=lambda r: r.get(sort_key, 0), reverse=True)
+    results.sort(key=lambda r: r.get(sort_key, 0),
+                 reverse=sort_by != "Niedrigster Drawdown")
 
     win_label = _WINDOW_LABEL.get(st.session_state.get("scan_window", "day"), "?")
     st.markdown(
@@ -953,25 +1051,40 @@ def _render_scanner(adapter):
     chosen = {t["wallet"] for t in trader_store.list_traders() if t["is_copied"]}
     st.dataframe(
         pd.DataFrame([{
-            "Status":        "🟢 kopiert" if r["wallet"] in chosen else "—",
+            "Status":        "🟢 kopiert" if r["wallet"] in chosen else "✅ verifiziert",
             "Trader":        _short(r["wallet"]),
+            "Score":         r["quality_score"],
             "Account":       r["account_value"],
-            "PnL (Fenster)": r["window_pnl"],
-            "Volumen":       r["window_volume"],
-            "Trades":        r["trades"],
+            "PnL Ranking":   r["window_pnl"],
+            "PnL 7T":        r["week_pnl"],
+            "PnL 30T":       r["month_pnl"],
+            "Trades 30T":    r["trades"],
+            "Aktive Tage":   r["active_days"],
             "Win-Rate":      r["win_rate"],
+            "Profit-Faktor": r["profit_factor"],
+            "Long-Trades":   r["long_trades"],
+            "Long-PnL":      r["long_net_pnl"],
+            "Long-PF":       r["long_profit_factor"],
+            "Drawdown":      r["max_drawdown_pct"] / 100,
             "Ø Hold":        r["avg_hold_sec"] / 60,
             "Aktiv vor":     r["last_active_age"] / 3600,
             "Explorer":      hl_explorer_url(r["wallet"]),
         } for r in results]),
         width="stretch", hide_index=True,
         column_config={
+            "Score":         st.column_config.ProgressColumn(
+                format="%.1f", min_value=0.0, max_value=100.0),
             "Account":       st.column_config.NumberColumn(format="$%.0f"),
-            "PnL (Fenster)": st.column_config.NumberColumn(format="$%+.0f"),
-            "Volumen":       st.column_config.NumberColumn(format="$%.0f"),
-            "Trades":        st.column_config.NumberColumn(format="%d"),
+            "PnL Ranking":   st.column_config.NumberColumn(format="$%+.0f"),
+            "PnL 7T":        st.column_config.NumberColumn(format="$%+.0f"),
+            "PnL 30T":       st.column_config.NumberColumn(format="$%+.0f"),
             "Win-Rate":      st.column_config.ProgressColumn(
                 format="%.0f%%", min_value=0.0, max_value=1.0),
+            "Profit-Faktor": st.column_config.NumberColumn(format="%.2f"),
+            "Long-PnL":      st.column_config.NumberColumn(format="$%+.0f"),
+            "Long-PF":       st.column_config.NumberColumn(format="%.2f"),
+            "Drawdown":      st.column_config.ProgressColumn(
+                format="%.1f%%", min_value=0.0, max_value=0.15),
             "Ø Hold":        st.column_config.NumberColumn(format="%.1f min"),
             "Aktiv vor":     st.column_config.NumberColumn(format="%.1f h"),
             "Explorer":      st.column_config.LinkColumn("🔗 Prüfen", display_text="Öffnen"),
@@ -988,6 +1101,8 @@ def _render_scanner(adapter):
                                  step=5.0, label_visibility="collapsed")
         adopt = a3.form_submit_button("🚀 Kopieren", type="primary", width="stretch")
     if adopt:
+        selected = next(result for result in results if result["wallet"] == choice)
+        trader_store.save_verification(choice, selected)
         adapter.set_copy_size(choice, amount)
         adapter.activate_wallet(choice)
         adapter.set_focus_wallet(choice)

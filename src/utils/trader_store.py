@@ -111,6 +111,12 @@ _SCHEMA = (
         status      TEXT NOT NULL DEFAULT 'pending',
         result      TEXT NOT NULL DEFAULT ''
     )""",
+    """CREATE TABLE IF NOT EXISTS trader_verifications (
+        wallet       TEXT PRIMARY KEY,
+        verified_at  REAL NOT NULL,
+        quality_score REAL NOT NULL,
+        metrics_json TEXT NOT NULL
+    )""",
 )
 
 # So viele Ereignisse bleiben erhalten; ältere werden beim Schreiben gekappt.
@@ -216,6 +222,7 @@ def remove_trader(wallet: str) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM copy_traders WHERE wallet = ?", (w,))
         conn.execute("DELETE FROM tracker_state WHERE wallet = ?", (w,))
+        conn.execute("DELETE FROM trader_verifications WHERE wallet = ?", (w,))
 
 
 def list_traders() -> list[dict[str, Any]]:
@@ -240,6 +247,49 @@ def get_focus() -> Optional[str]:
     except sqlite3.Error:
         return None
     return row["wallet"] if row else None
+
+
+def save_verification(wallet: str, metrics: dict[str, Any]) -> None:
+    """Den exakten Scanner-Befund zum Zeitpunkt der Übernahme speichern."""
+    snapshot_keys = (
+        "quality_score", "account_value", "day_pnl", "week_pnl", "month_pnl",
+        "trades", "active_days", "win_rate", "profit_factor",
+        "max_drawdown", "max_drawdown_pct", "long_trades", "long_net_pnl",
+        "long_profit_factor", "long_share", "avg_hold_sec", "last_active_age",
+        "verification_window", "metrics_source",
+    )
+    snapshot = {key: metrics.get(key) for key in snapshot_keys}
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO trader_verifications
+               (wallet, verified_at, quality_score, metrics_json)
+               VALUES (?,?,?,?)
+               ON CONFLICT(wallet) DO UPDATE SET
+                   verified_at=excluded.verified_at,
+                   quality_score=excluded.quality_score,
+                   metrics_json=excluded.metrics_json""",
+            (wallet.strip(), time.time(), float(metrics["quality_score"]),
+             json.dumps(snapshot)),
+        )
+
+
+def get_verification(wallet: str) -> Optional[dict[str, Any]]:
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM trader_verifications WHERE wallet = ?",
+                (wallet.strip(),),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if not row:
+        return None
+    result = dict(row)
+    try:
+        result["metrics"] = json.loads(result.pop("metrics_json"))
+    except json.JSONDecodeError:
+        result["metrics"] = {}
+    return result
 
 
 # ── tracker_state (Bot schreibt, Dashboard liest) ────────────────────────────

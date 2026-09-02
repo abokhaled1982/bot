@@ -50,8 +50,8 @@ RESCAN_INTERVAL_SEC = float(os.getenv("HL_RESCAN_HOURS", "6")) * 3600
 MIN_TRADES = int(os.getenv("HL_MIN_TRADES", "100"))
 MIN_WIN_RATE = float(os.getenv("HL_MIN_WIN_RATE", "0.55"))
 MIN_ACCOUNT_VALUE = float(os.getenv("HL_MIN_ACCOUNT_USD", "10000"))
-# Prefer scalpers: maximum average hold time in seconds
-MAX_AVG_HOLD_SEC = float(os.getenv("HL_MAX_AVG_HOLD_SEC", "1800"))  # 30min
+# Normale Profi-Trader dürfen Positionen im Mittel bis zu 24 Stunden halten.
+MAX_AVG_HOLD_SEC = float(os.getenv("HL_MAX_AVG_HOLD_SEC", "86400"))
 # Trader must have closed a trade within this window to count as "active"
 ACTIVE_WITHIN_SEC = float(os.getenv("HL_ACTIVE_WITHIN_HOURS", "24")) * 3600
 # How many leaderboard candidates to fetch detailed fill stats for
@@ -194,11 +194,20 @@ class TraderStats:
 
 @dataclass
 class TraderMetrics:
-    """Derived scalper metrics used to filter auto-discovered traders."""
+    """Aus geschlossenen Fills abgeleitete Qualitäts- und Copy-Kennzahlen."""
     trades:           int
     win_rate:         float
     avg_hold_sec:      float
     last_active_age:  float
+    net_pnl:           float
+    profit_factor:     float
+    max_drawdown:      float
+    max_drawdown_pct:  float
+    active_days:       int
+    long_trades:       int
+    long_net_pnl:      float
+    long_profit_factor: float
+    long_share:        float
 
 
 
@@ -560,20 +569,18 @@ class HyperliquidCopyTrader:
     def list_leaderboard(
         self, window: str = "day", limit: int = 30,
         min_trades: int = 0, min_win_rate: float = 0.0,
+        min_avg_hold_sec: float = 120.0,
         max_avg_hold_sec: Optional[float] = None,
         min_account_value: float = 0.0,
+        verified_only: bool = True,
         progress_cb: Optional[callable] = None,
     ) -> list[dict]:
-        """Rank HL leaderboard traders by PnL in a user-chosen window and attach fill metrics.
+        """Nur quantitativ verifizierte, Spot-Copy-taugliche Trader liefern.
 
-        Used by the dashboard's manual trader search — unlike `_discover_scalpers`,
-        callers pick their own window/filters instead of the fixed HL_* env defaults.
-        The HL API is rate-limited, so each candidate's fills lookup is throttled
-        (~2s apart) — `progress_cb(done, total, wallet)` lets callers show progress
-        instead of a long silent block.
-
-        Metrics (trades/win-rate/hold) are restricted to the SAME window that PnL/
-        Volume come from — so a "1 Tag" search yields 1-day trades, not lifetime.
+        Ranking-PnL stammt aus dem gewählten Fenster. Die Verifikation verwendet
+        immer 30 Tage, damit ein guter einzelner Tag keinen Trader qualifiziert.
+        "Verifiziert" bezeichnet ausschließlich die messbare Handelsqualität der
+        öffentlichen HL-Wallet, nicht die Identität einer Person.
         """
         rows = self._fetch_leaderboard()
         if not rows:
@@ -593,7 +600,14 @@ class HyperliquidCopyTrader:
             pnl, vlm = self._leaderboard_window_metric(row, window)
             if pnl <= 0:
                 continue
-            ranked.append((wallet, pnl, {"account_value": acct_value, "pnl": pnl, "vlm": vlm}))
+            day_pnl, _ = self._leaderboard_window_metric(row, "day")
+            week_pnl, _ = self._leaderboard_window_metric(row, "week")
+            month_pnl, _ = self._leaderboard_window_metric(row, "month")
+            ranked.append((wallet, pnl, {
+                "account_value": acct_value, "pnl": pnl, "vlm": vlm,
+                "day_pnl": day_pnl, "week_pnl": week_pnl,
+                "month_pnl": month_pnl,
+            }))
 
         ranked.sort(key=lambda r: r[1], reverse=True)
         candidates = ranked[:limit]
@@ -602,28 +616,55 @@ class HyperliquidCopyTrader:
         for i, (wallet, _, info) in enumerate(candidates, 1):
             if progress_cb:
                 progress_cb(i, len(candidates), wallet)
-            metrics = self._compute_trader_metrics(wallet, since_ts=since_ts)
-            if metrics is None:
+            self._trader_stats[wallet] = TraderStats(
+                wallet=wallet, total_pnl=info["account_value"],
+            )
+            display_metrics = self._compute_trader_metrics(wallet, since_ts=since_ts)
+            verification_since = time.time() - LEADERBOARD_WINDOW_SEC["month"]
+            metrics = self._compute_trader_metrics(wallet, since_ts=verification_since)
+            if metrics is None or display_metrics is None:
                 continue
-            if metrics.trades < min_trades:
-                continue
-            if metrics.win_rate < min_win_rate:
-                continue
-            if max_avg_hold_sec is not None and metrics.avg_hold_sec > max_avg_hold_sec:
-                continue
-            results.append({
+            verified, reasons = self._verify_copy_candidate(
+                metrics,
+                day_pnl=info["day_pnl"],
+                week_pnl=info["week_pnl"],
+                month_pnl=info["month_pnl"],
+                min_trades=max(30, min_trades),
+                min_win_rate=max(0.45, min_win_rate),
+                min_avg_hold_sec=min_avg_hold_sec,
+                max_avg_hold_sec=max_avg_hold_sec or 86_400.0,
+            )
+            score = self._copy_quality_score(metrics, info)
+            candidate = {
                 "wallet":           wallet,
                 "account_value":    info["account_value"],
                 "window_pnl":       info["pnl"],
                 "window_volume":    info["vlm"],
+                "day_pnl":          info["day_pnl"],
+                "week_pnl":         info["week_pnl"],
+                "month_pnl":        info["month_pnl"],
                 "trades":           metrics.trades,
                 "win_rate":         metrics.win_rate,
                 "avg_hold_sec":     metrics.avg_hold_sec,
                 "last_active_age":  metrics.last_active_age,
+                "profit_factor":    metrics.profit_factor,
+                "max_drawdown":     metrics.max_drawdown,
+                "max_drawdown_pct": metrics.max_drawdown_pct,
+                "active_days":      metrics.active_days,
+                "long_trades":      metrics.long_trades,
+                "long_net_pnl":     metrics.long_net_pnl,
+                "long_profit_factor": metrics.long_profit_factor,
+                "long_share":       metrics.long_share,
+                "quality_score":    score,
+                "verified":         verified,
+                "verification_reasons": reasons,
                 "metrics_window":   window,
-                "metrics_source":   "hl_rest",
-            })
-        return results
+                "verification_window": "month",
+                "metrics_source":   "hl_public_api",
+            }
+            if not verified_only or verified:
+                results.append(candidate)
+        return sorted(results, key=lambda result: result["quality_score"], reverse=True)
 
     def get_trader_focus(self, wallet: str) -> Optional[dict]:
         """Deep-dive snapshot of one trader for the dashboard Focus tab.
@@ -1080,58 +1121,27 @@ class HyperliquidCopyTrader:
                 logger.debug(f"[HL] Rescan error: {e}")
 
     def _discover_scalpers(self) -> list[str]:
-        """Scan the HL leaderboard for active, high-frequency, high-winrate scalpers."""
-        rows = self._fetch_leaderboard()
-        if not rows:
-            return []
-
-        candidates: list[tuple[str, float]] = []
-        for row in rows:
-            wallet = row.get("ethAddress")
-            if not wallet:
-                continue
-            acct_value = float(row.get("accountValue", "0") or "0")
-            if acct_value < MIN_ACCOUNT_VALUE:
-                continue
-            day_pnl, day_vlm = self._leaderboard_window_metric(row, "day")
-            if day_pnl <= 0 or day_vlm <= 0:
-                continue
-            candidates.append((wallet, day_vlm))
-
-        # Prefer wallets with the highest daily volume (proxy for trade frequency)
-        candidates.sort(key=lambda c: c[1], reverse=True)
-        candidates = candidates[:DISCOVERY_CANDIDATE_POOL]
-        logger.debug(f"[HL-COPY] Evaluating {len(candidates)} leaderboard candidate(s)...")
-
-        scored: list[tuple[str, TraderMetrics]] = []
-        # Restrict metrics to a recent window so auto-discovery ranks by *current*
-        # behaviour, not lifetime — otherwise the same top wallets get re-selected
-        # every rescan regardless of how they're actually trading now.
-        discovery_since_ts = time.time() - max(ACTIVE_WITHIN_SEC * 7, 7 * 86400.0)
-        for wallet, _ in candidates:
-            metrics = self._compute_trader_metrics(wallet, since_ts=discovery_since_ts)
-            if metrics is None:
-                continue
-            if metrics.trades < MIN_TRADES:
-                continue
-            if metrics.win_rate < MIN_WIN_RATE:
-                continue
-            if metrics.avg_hold_sec > MAX_AVG_HOLD_SEC:
-                continue
-            if metrics.last_active_age > ACTIVE_WITHIN_SEC:
-                continue
-            scored.append((wallet, metrics))
-
-        scored.sort(key=lambda x: x[1].win_rate, reverse=True)
-        selected = scored[:MAX_TRACKED_TRADERS]
-        for wallet, metrics in selected:
-            short = f"{wallet[:6]}...{wallet[-4:]}"
+        """Quantitativ verifizierte Spot-Copy-Kandidaten automatisch auswählen."""
+        results = self.list_leaderboard(
+            window="month",
+            limit=DISCOVERY_CANDIDATE_POOL,
+            min_trades=MIN_TRADES,
+            min_win_rate=MIN_WIN_RATE,
+            min_avg_hold_sec=120.0,
+            max_avg_hold_sec=MAX_AVG_HOLD_SEC,
+            min_account_value=MIN_ACCOUNT_VALUE,
+            verified_only=True,
+        )
+        selected = results[:MAX_TRACKED_TRADERS]
+        for candidate in selected:
             logger.debug(
-                f"[HL-COPY] Kandidat {short} | trades={metrics.trades} | "
-                f"win_rate={metrics.win_rate:.0%} | "
-                f"avg_hold={metrics.avg_hold_sec / 60:.1f}min"
+                f"[HL] Verifizierter Kandidat {self._short(candidate['wallet'])} | "
+                f"Score={candidate['quality_score']:.1f} | "
+                f"PF={candidate['profit_factor']:.2f} | "
+                f"Long-PF={candidate['long_profit_factor']:.2f} | "
+                f"DD={candidate['max_drawdown_pct']:.1f}%"
             )
-        return [w for w, _ in selected]
+        return [candidate["wallet"] for candidate in selected]
 
     @staticmethod
     def _fetch_leaderboard() -> list[dict]:
@@ -1150,6 +1160,73 @@ class HyperliquidCopyTrader:
         perf = dict(row.get("windowPerformances", []))
         w = perf.get(window, {})
         return float(w.get("pnl", "0") or "0"), float(w.get("vlm", "0") or "0")
+
+    @staticmethod
+    def _verify_copy_candidate(
+        metrics: TraderMetrics,
+        *,
+        day_pnl: float,
+        week_pnl: float,
+        month_pnl: float,
+        min_trades: int,
+        min_win_rate: float,
+        min_avg_hold_sec: float,
+        max_avg_hold_sec: float,
+    ) -> tuple[bool, list[str]]:
+        """Harte Gates für einen statistisch belastbaren Spot-Copy-Kandidaten."""
+        failures = []
+        gates = (
+            (metrics.trades >= min_trades, f"nur {metrics.trades}/{min_trades} Trades (30T)"),
+            (metrics.active_days >= 5, f"nur {metrics.active_days}/5 aktive Tage"),
+            (metrics.win_rate >= min_win_rate,
+             f"Win-Rate {metrics.win_rate:.0%} < {min_win_rate:.0%}"),
+            (metrics.profit_factor >= 1.30,
+             f"Profit-Faktor {metrics.profit_factor:.2f} < 1.30"),
+            (metrics.max_drawdown_pct <= 15.0,
+             f"Drawdown {metrics.max_drawdown_pct:.1f}% > 15%"),
+            (metrics.long_trades >= 10,
+             f"nur {metrics.long_trades}/10 kopierbare Long-Trades"),
+            (metrics.long_share >= 0.25,
+             f"Long-Anteil {metrics.long_share:.0%} < 25%"),
+            (metrics.long_net_pnl > 0,
+             f"Long-PnL nicht positiv (${metrics.long_net_pnl:+,.0f})"),
+            (metrics.long_profit_factor >= 1.20,
+             f"Long-Profit-Faktor {metrics.long_profit_factor:.2f} < 1.20"),
+            (metrics.avg_hold_sec >= min_avg_hold_sec,
+             f"Ø Haltedauer {metrics.avg_hold_sec / 60:.1f}min zu kurz"),
+            (metrics.avg_hold_sec <= max_avg_hold_sec,
+             f"Ø Haltedauer {metrics.avg_hold_sec / 60:.1f}min zu lang"),
+            (metrics.last_active_age <= ACTIVE_WITHIN_SEC,
+             f"letzte Aktivität {metrics.last_active_age / 3600:.1f}h her"),
+            (week_pnl > 0, f"7T-PnL negativ (${week_pnl:+,.0f})"),
+            (month_pnl > 0, f"30T-PnL negativ (${month_pnl:+,.0f})"),
+        )
+        failures.extend(message for passed, message in gates if not passed)
+        return not failures, failures
+
+    @staticmethod
+    def _copy_quality_score(metrics: TraderMetrics, performance: dict) -> float:
+        """Score 0–100; harte Verifikation entscheidet, Score sortiert danach."""
+        def bounded(value: float, low: float, high: float) -> float:
+            return max(0.0, min(1.0, (value - low) / (high - low)))
+
+        profit_factor = min(metrics.profit_factor, 4.0)
+        long_profit_factor = min(metrics.long_profit_factor, 4.0)
+        consistency = sum(
+            float(performance[key] > 0)
+            for key in ("day_pnl", "week_pnl", "month_pnl")
+        ) / 3
+        score = (
+            20 * bounded(profit_factor, 1.0, 2.5)
+            + 20 * bounded(long_profit_factor, 1.0, 2.5)
+            + 15 * (1 - min(metrics.max_drawdown_pct, 15.0) / 15.0)
+            + 15 * min(metrics.trades / 100, 1.0)
+            + 10 * bounded(metrics.win_rate, 0.40, 0.65)
+            + 10 * consistency
+            + 5 * min(metrics.active_days / 15, 1.0)
+            + 5 * min(metrics.long_share / 0.60, 1.0)
+        )
+        return round(score, 1)
 
     def _fetch_user_fills(self, wallet: str) -> Optional[list[dict]]:
         """Fetch raw userFills for a wallet, cached for METRICS_CACHE_TTL.
@@ -1182,7 +1259,7 @@ class HyperliquidCopyTrader:
     def _compute_trader_metrics(
         self, wallet: str, since_ts: Optional[float] = None,
     ) -> Optional[TraderMetrics]:
-        """Derive trade count, win-rate and avg hold time from recent fills.
+        """Profitabilität, Risiko und Spot-Copy-Eignung aus Fills ableiten.
 
         `since_ts` restricts fills to a wall-clock window so the resulting metrics
         actually match the PnL/Volume window the user picked in the scanner —
@@ -1204,8 +1281,11 @@ class HyperliquidCopyTrader:
         if not fills:
             return None
 
-        open_times: dict[str, float] = {}
+        open_times: dict[tuple[str, str], float] = {}
         hold_durations: list[float] = []
+        realized: list[float] = []
+        long_realized: list[float] = []
+        active_dates: set[str] = set()
         closed_trades = 0
         wins = 0
 
@@ -1213,14 +1293,23 @@ class HyperliquidCopyTrader:
             coin = fill.get("coin", "")
             direction = fill.get("dir", "")
             ts = float(fill.get("time", 0)) / 1000.0
+            active_dates.add(time.strftime("%Y-%m-%d", time.gmtime(ts)))
 
             if direction.startswith("Open"):
-                open_times[coin] = ts
+                side = "long" if "Long" in direction else "short"
+                open_times.setdefault((coin, side), ts)
             elif direction.startswith("Close"):
                 closed_trades += 1
-                if float(fill.get("closedPnl", "0") or "0") > 0:
+                pnl = float(fill.get("closedPnl", "0") or "0")
+                fee = abs(float(fill.get("fee", "0") or "0"))
+                net = pnl - fee
+                realized.append(net)
+                if net > 0:
                     wins += 1
-                open_ts = open_times.pop(coin, None)
+                side = "long" if "Long" in direction else "short"
+                if side == "long":
+                    long_realized.append(net)
+                open_ts = open_times.pop((coin, side), None)
                 if open_ts is not None:
                     hold_durations.append(ts - open_ts)
 
@@ -1233,11 +1322,40 @@ class HyperliquidCopyTrader:
         )
         last_active_age = time.time() - (fills[-1].get("time", 0) / 1000.0)
 
+        gross_profit = sum(value for value in realized if value > 0)
+        gross_loss = abs(sum(value for value in realized if value < 0))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+        long_profit = sum(value for value in long_realized if value > 0)
+        long_loss = abs(sum(value for value in long_realized if value < 0))
+        long_profit_factor = long_profit / long_loss if long_loss > 0 else (
+            float("inf") if long_profit > 0 else 0.0
+        )
+
+        equity = peak = max_drawdown = 0.0
+        for value in realized:
+            equity += value
+            peak = max(peak, equity)
+            max_drawdown = max(max_drawdown, peak - equity)
+        stats = self._trader_stats.get(wallet)
+        account_value = stats.total_pnl if stats else 0.0
+        max_drawdown_pct = (
+            max_drawdown / account_value * 100 if account_value > 0 else float("inf")
+        )
+
         metrics = TraderMetrics(
             trades=closed_trades,
             win_rate=wins / closed_trades,
             avg_hold_sec=avg_hold,
             last_active_age=last_active_age,
+            net_pnl=sum(realized),
+            profit_factor=profit_factor,
+            max_drawdown=max_drawdown,
+            max_drawdown_pct=max_drawdown_pct,
+            active_days=len(active_dates),
+            long_trades=len(long_realized),
+            long_net_pnl=sum(long_realized),
+            long_profit_factor=long_profit_factor,
+            long_share=len(long_realized) / closed_trades,
         )
         self._metrics_cache[cache_key] = (time.time(), metrics)
         return metrics
