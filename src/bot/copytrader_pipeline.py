@@ -48,6 +48,9 @@ SLIPPAGE_BPS  = float(os.getenv("SCALP_SLIPPAGE_BPS", "2"))
 ROUND_TRIP    = 2 * TAKER_FEE + (2 * SLIPPAGE_BPS / 100)
 
 DB_PATH = "binance_orderflow.db"
+HISTORY_PATH = os.getenv("COPY_HISTORY_FILE", "copy_history.json")
+CLOSE_REQUEST_PATH = os.getenv("COPY_CLOSE_REQUEST_FILE", "close_requests.json")
+MAX_HISTORY = 500
 
 
 # ── Checks ────────────────────────────────────────────────────────────────────
@@ -86,6 +89,20 @@ def _save_positions(positions: dict) -> None:
         logger.error(f"Failed to save positions.json: {e}")
 
 
+def _append_history(entry: dict) -> None:
+    """Append a closed copy-trade so the dashboard can show per-trader history."""
+    try:
+        history = []
+        if os.path.exists(HISTORY_PATH):
+            with open(HISTORY_PATH, encoding="utf-8") as f:
+                history = json.load(f)
+        history.append(entry)
+        with open(HISTORY_PATH, "w", encoding="utf-8") as f:
+            json.dump(history[-MAX_HISTORY:], f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to append {HISTORY_PATH}: {e}")
+
+
 def _close_paper_position(
     symbol: str, position: dict, exit_price: float,
     reason: str, positions: dict,
@@ -99,6 +116,23 @@ def _close_paper_position(
 
     positions.pop(symbol, None)
     _save_positions(positions)
+
+    _append_history({
+        "trader":      position.get("hl_trader_full", ""),
+        "trader_short": position.get("hl_trader", ""),
+        "symbol":      symbol,
+        "hl_coin":     position.get("hl_coin", ""),
+        "entry_price": entry_price,
+        "exit_price":  exit_price,
+        "size_usdt":   float(position["size_usdt"]),
+        "qty":         qty,
+        "pnl_usdt":    pnl_usdt,
+        "pnl_pct":     pnl_pct,
+        "reason":      reason,
+        "opened_at":   float(position.get("opened_at", 0)),
+        "closed_at":   time.time(),
+        "dry_run":     bool(position.get("dry_run", DRY_RUN)),
+    })
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -173,6 +207,42 @@ async def _paper_monitor(
             elif held >= MAX_HOLD_SEC:
                 _close_paper_position(
                     symbol, pos, price, "TIME_EXIT", positions,
+                )
+
+
+async def _close_request_loop(
+    bn_adapter: BinanceOrderFlowAdapter, positions: dict,
+) -> None:
+    """Execute close requests the dashboard drops as JSON (cross-process control)."""
+    while True:
+        await asyncio.sleep(2)
+        if not os.path.exists(CLOSE_REQUEST_PATH):
+            continue
+        try:
+            with open(CLOSE_REQUEST_PATH, encoding="utf-8") as f:
+                request = json.load(f)
+            os.remove(CLOSE_REQUEST_PATH)
+        except Exception as e:
+            logger.error(f"Close request read error: {e}")
+            continue
+
+        symbols = request.get("symbols") or []
+        reason = str(request.get("reason", "MANUAL"))[:40]
+        for symbol in symbols:
+            pos = positions.get(symbol)
+            if not pos:
+                continue
+            ticker = bn_adapter.get_ticker(symbol)
+            price = float(ticker.get("price_usd", 0)) if ticker else 0.0
+            if price <= 0:
+                logger.warning(f"[COPY] Close request {symbol}: no price, skipped")
+                continue
+            if pos.get("dry_run"):
+                _close_paper_position(symbol, pos, price, reason, positions)
+            else:
+                logger.warning(
+                    f"[COPY] Close request {symbol} ignored — LIVE positions are "
+                    f"managed by their OCO order. Close it manually on Binance."
                 )
 
 
@@ -296,17 +366,17 @@ async def handle_copy_signal(
                 decision, buy_amount_usd, funnel_stage, gates_passed,
                 timestamp)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (symbol, symbol, exec_price, POSITION_SIZE, 95.0,
+            (symbol, symbol, exec_price, size_usdt, 95.0,
              f"BUY COPY ({'DRY-RUN' if DRY_RUN else 'LIVE'})",
-             POSITION_SIZE, "COPY_EXECUTION",
-             f"Trader:{sig.trader_short}", ts),
+             size_usdt, "COPY_EXECUTION",
+             f"Trader:{sig.trader}", ts),
         )
         conn.execute(
             """INSERT INTO bot_events
                (event_type, symbol, address, buy_amount_usd, price_usd,
                 stage, message, timestamp)
                VALUES (?,?,?,?,?,?,?,?)""",
-            ("BUY", symbol, symbol, POSITION_SIZE, exec_price,
+            ("BUY", symbol, symbol, size_usdt, exec_price,
              "COPY_EXECUTION",
              f"Copy {sig.trader_short} {sig.coin} "
              f"${sig.size_usd:,.0f} {sig.leverage:.0f}x",
@@ -352,8 +422,15 @@ async def main_loop() -> None:
     if os.path.exists("positions.json"):
         try:
             with open("positions.json") as f:
-                positions = json.load(f)
-            logger.info(f"Loaded {len(positions)} existing positions")
+                raw = json.load(f)
+            # Drop leftovers from the retired order-flow strategy — they have no
+            # trader attribution and would block MAX_POSITIONS forever.
+            positions = {s: p for s, p in raw.items() if p.get("source") == "COPY"}
+            dropped = len(raw) - len(positions)
+            logger.info(f"Loaded {len(positions)} copy positions")
+            if dropped:
+                logger.warning(f"Discarded {dropped} legacy non-copy position(s) from positions.json")
+                _save_positions(positions)
         except Exception:
             pass
 
@@ -362,6 +439,7 @@ async def main_loop() -> None:
     asyncio.create_task(hl_adapter.cleanup_loop())
     asyncio.create_task(bn_adapter.start())
     asyncio.create_task(bn_adapter.cleanup_loop())
+    asyncio.create_task(_close_request_loop(bn_adapter, positions))
     if DRY_RUN:
         asyncio.create_task(_paper_monitor(bn_adapter, positions))
 
@@ -376,14 +454,34 @@ async def main_loop() -> None:
             await asyncio.sleep(15)
             count += 1
             hl_st = hl_adapter.status()
-            bn_st = bn_adapter.status()
+            copied = len(hl_adapter.get_active_wallets())
             logger.info(
-                f"── Copy #{count} | "
-                f"HL:{hl_st['tracked_traders']} traders, "
-                f"{hl_st['total_positions']} pos | "
-                f"BN:{bn_st['tracked_symbols']} tickers | "
-                f"Our pos:{len(positions)}/{MAX_POSITIONS} ──"
+                f"── #{count} | Kopiert:{copied} Trader "
+                f"(von {hl_st['tracked_traders']} beobachtet) | "
+                f"Meine Positionen:{len(positions)}/{MAX_POSITIONS} ──"
             )
+            if not positions:
+                continue
+            for symbol, pos in positions.items():
+                ticker = bn_adapter.get_ticker(symbol)
+                price = float(ticker.get("price_usd", 0)) if ticker else 0.0
+                entry = float(pos.get("entry_price", 0))
+                size = float(pos.get("size_usdt", 0))
+                held = time.time() - float(pos.get("opened_at", time.time()))
+                if price > 0 and entry > 0:
+                    gain = (price / entry - 1) * 100 - ROUND_TRIP
+                    pnl = size * gain / 100
+                    mark = "🟢" if pnl >= 0 else "🔴"
+                    logger.info(
+                        f"   {mark} {symbol} | {pos.get('hl_trader', '?')} | "
+                        f"${size:.0f} | entry ${entry:.4f} → ${price:.4f} | "
+                        f"PnL ${pnl:+.2f} ({gain:+.2f}%) | {held/60:.1f}min"
+                    )
+                else:
+                    logger.info(
+                        f"   ⚪️ {symbol} | {pos.get('hl_trader', '?')} | "
+                        f"${size:.0f} | entry ${entry:.4f} | kein Preis | {held/60:.1f}min"
+                    )
 
     asyncio.create_task(_status())
 

@@ -111,7 +111,7 @@ class BinanceOrderFlowAdapter:
         while True:
             await asyncio.sleep(60)
             st = self.status()
-            logger.info(
+            logger.debug(
                 f"[BINANCE] Status | Connected: {st['connected']} | "
                 f"Tickers: {st['tracked_symbols']}"
             )

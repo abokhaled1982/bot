@@ -396,7 +396,14 @@ class HyperliquidCopyTrader:
         self._save_focus_wallet()
 
     def _should_emit_signals_for(self, wallet: str) -> bool:
-        return wallet not in self._observed_only
+        """Only explicitly chosen traders are copied.
+
+        Auto-discovered wallets are watch-only until the user activates them in
+        the dashboard — otherwise every leaderboard hit would place real orders.
+        """
+        if wallet in self._observed_only:
+            return False
+        return wallet in MANUAL_WALLETS or wallet in self._manual_active
 
     @staticmethod
     def _load_copy_sizes() -> dict[str, float]:
@@ -681,12 +688,13 @@ class HyperliquidCopyTrader:
 
 
     def _diff_positions(self, wallet: str, new_pos: dict[str, dict]) -> None:
-        # Focus-only wallets get the SAME live console logs, but no copy signal
-        # goes on the queue (user is watching, not copying).
+        # Watch-only wallets still update state and the dashboard, but stay off
+        # the INFO console — only copied traders are console-worthy.
         emit_signals = self._should_emit_signals_for(wallet)
         old_pos = self._positions.get(wallet, {})
         short = f"{wallet[:6]}...{wallet[-4:]}" if len(wallet) > 12 else wallet
         tag = "COPY" if emit_signals else "WATCH"
+        log = logger.info if emit_signals else logger.debug
 
         for coin, pos in new_pos.items():
             if coin in _UNSUPPORTED_COINS:
@@ -704,7 +712,7 @@ class HyperliquidCopyTrader:
                         entry_price=pos["entry_px"], leverage=pos["leverage"],
                         pnl_pct=pos["pnl_pct"],
                     ))
-                logger.info(
+                log(
                     f"[HL-{tag}] 📈 OPEN LONG | {short} | {coin} | "
                     f"${value:,.0f} @ ${pos['entry_px']:.4f} | "
                     f"{pos['leverage']:.0f}x"
@@ -717,7 +725,7 @@ class HyperliquidCopyTrader:
                         entry_price=pos["entry_px"], leverage=pos["leverage"],
                         pnl_pct=pos["pnl_pct"],
                     ))
-                logger.info(
+                log(
                     f"[HL-{tag}] 📉 OPEN SHORT | {short} | {coin} | "
                     f"${value:,.0f} @ ${pos['entry_px']:.4f} | "
                     f"{pos['leverage']:.0f}x (info only)"
@@ -735,7 +743,7 @@ class HyperliquidCopyTrader:
                             entry_price=pos["entry_px"],
                             leverage=pos["leverage"], pnl_pct=pos["pnl_pct"],
                         ))
-                    logger.info(
+                    log(
                         f"[HL-{tag}] ⬆️  INCREASE | {short} | {coin} | "
                         f"+{change:.0f}% → ${value:,.0f}"
                     )
@@ -747,7 +755,7 @@ class HyperliquidCopyTrader:
                             entry_price=pos["entry_px"],
                             leverage=pos["leverage"], pnl_pct=pos["pnl_pct"],
                         ))
-                    logger.info(
+                    log(
                         f"[HL-{tag}] ⬇️  DECREASE | {short} | {coin} | "
                         f"-{change:.0f}% → ${value:,.0f}"
                     )
@@ -764,12 +772,12 @@ class HyperliquidCopyTrader:
                             entry_price=old["entry_px"],
                             leverage=old["leverage"], pnl_pct=old["pnl_pct"],
                         ))
-                    logger.info(
+                    log(
                         f"[HL-{tag}] 🔴 CLOSE LONG | {short} | {coin} | "
                         f"PnL: {old['pnl_pct']:+.2f}%"
                     )
                 elif old["size"] < 0:
-                    logger.info(
+                    log(
                         f"[HL-{tag}] 🔴 CLOSE SHORT | {short} | {coin} | "
                         f"PnL: {old['pnl_pct']:+.2f}% (info only)"
                     )
@@ -839,7 +847,11 @@ class HyperliquidCopyTrader:
             if user not in self._wallets:
                 return
             short = f"{user[:6]}...{user[-4:]}"
-            tag = "COPY" if self._should_emit_signals_for(user) else "WATCH"
+            is_copied = self._should_emit_signals_for(user)
+            # Only traders we actually copy are worth console noise; the rest are
+            # discovery candidates and stay on DEBUG.
+            emit = logger.info if is_copied else logger.debug
+            tag = "COPY" if is_copied else "WATCH"
             for f in data.get("fills", []) or []:
                 try:
                     coin = f.get("coin", "?")
@@ -849,7 +861,7 @@ class HyperliquidCopyTrader:
                     direction = f.get("dir", "")
                     closed_pnl = float(f.get("closedPnl", "0") or "0")
                     arrow = "🟢 BUY " if side == "B" else "🔴 SELL"
-                    logger.info(
+                    emit(
                         f"[HL-{tag}] {arrow} {short} | {coin} | "
                         f"{sz:.4f} @ ${px:.4f} = ${sz * px:,.0f} | "
                         f"{direction} | PnL: ${closed_pnl:+,.2f}"
@@ -870,7 +882,9 @@ class HyperliquidCopyTrader:
                 if stats:
                     self._trader_stats[wallet] = stats
                     short = f"{wallet[:6]}...{wallet[-4:]}"
-                    logger.info(
+                    emit = (logger.info if self._should_emit_signals_for(wallet)
+                            else logger.debug)
+                    emit(
                         f"[HL-COPY] 📊 {short} | "
                         f"Account: ${stats.total_pnl:,.0f} | "
                         f"Fills: {stats.total_trades}"
@@ -1137,20 +1151,23 @@ class HyperliquidCopyTrader:
         while True:
             await asyncio.sleep(60)
             st = self.status()
-            logger.info(
-                f"[HL-COPY] Status | WS:{st['ws_connected']} | "
+            logger.debug(
+                f"[HL] Status | WS:{st['ws_connected']} | "
                 f"Traders:{st['tracked_traders']} | "
                 f"Pos:{st['total_positions']} | "
                 f"Signals:{st['fresh_signals']}"
             )
             for wallet in list(self._wallets):
                 positions = self._positions.get(wallet, {})
-                if positions:
-                    short = f"{wallet[:6]}...{wallet[-4:]}"
-                    coins = ", ".join(
-                        f"{c} {'L' if p['size']>0 else 'S'} "
-                        f"${p['value_usd']:,.0f}"
-                        for c, p in positions.items()
-                    )
+                if not positions:
+                    continue
+                short = f"{wallet[:6]}...{wallet[-4:]}"
+                coins = ", ".join(
+                    f"{c} {'L' if p['size']>0 else 'S'} ${p['value_usd']:,.0f}"
+                    for c, p in positions.items()
+                )
+                if self._should_emit_signals_for(wallet):
                     logger.info(f"[HL-COPY]   {short}: {coins}")
+                else:
+                    logger.debug(f"[HL-WATCH]  {short}: {coins}")
 
