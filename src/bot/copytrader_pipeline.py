@@ -1,16 +1,17 @@
 """
-src/bot/copytrader_pipeline.py — Hyperliquid Copy-Trader Pipeline
+src/bot/copytrader_pipeline.py — Binance-Leaderboard Copy-Trader Pipeline
 
-Receives signals from HyperliquidCopyTrader (a tracked pro opened/closed
-a position on Hyperliquid) and executes the corresponding trade on Binance
-Spot after verifying market quality.
+Receives signals from BinanceLeaderboardTrader (a tracked pro opened/closed
+a position on Binance Futures, publicly shared via Binance's own copy-trading
+leaderboard) and executes the corresponding trade on Binance Spot after
+verifying market quality.
 
 Signal flow:
-  Hyperliquid Trader opens BTC Long
+  Leaderboard-Trader opens BTC Long
     → COPY_OPEN_LONG signal
-    → Verify BTCUSDT on Binance (liquid? spread OK? not already in position?)
+    → Verify BTCUSDT on Binance Spot (liquid? spread OK? not already in position?)
     → Market BUY on Binance + OCO exit
-  Hyperliquid Trader closes BTC Long
+  Leaderboard-Trader closes BTC Long
     → COPY_CLOSE_LONG signal
     → Market SELL on Binance (close our position)
 """
@@ -26,8 +27,8 @@ from typing import Optional
 
 from loguru import logger
 from src.adapters.binance_orderflow import BinanceOrderFlowAdapter
-from src.adapters.hyperliquid_copytrader import (
-    HyperliquidCopyTrader, CopySignal,
+from src.adapters.binance_leaderboard import (
+    BinanceLeaderboardTrader, CopySignal,
 )
 from src.execution.binance_executor import (
     place_market_buy, place_oco_sell, get_account_balance,
@@ -119,10 +120,10 @@ def _close_paper_position(
     _save_positions(positions)
 
     _append_history({
-        "trader":      position.get("hl_trader_full", ""),
-        "trader_short": position.get("hl_trader", ""),
+        "trader":      position.get("trader_full", ""),
+        "trader_short": position.get("trader", ""),
         "symbol":      symbol,
-        "hl_coin":     position.get("hl_coin", ""),
+        "coin":        position.get("coin", ""),
         "entry_price": entry_price,
         "exit_price":  exit_price,
         "size_usdt":   float(position["size_usdt"]),
@@ -168,7 +169,7 @@ def _close_paper_position(
     trader_store.log_event(
         "SELL",
         f"{reason} | Exit ${exit_price:.4f} | PnL ${pnl_usdt:+.2f} ({pnl_pct:+.2f}%)",
-        wallet=position.get("hl_trader_full", ""), symbol=symbol,
+        wallet=position.get("trader_full", ""), symbol=symbol,
         level="success" if pnl_usdt >= 0 else "warning",
     )
 
@@ -255,7 +256,7 @@ async def _close_request_loop(
 
 
 async def _heartbeat_loop(
-    hl_adapter: HyperliquidCopyTrader, positions: dict,
+    lb_adapter: BinanceLeaderboardTrader, positions: dict,
 ) -> None:
     """Lebenszeichen des Bot-Prozesses in die DB schreiben.
 
@@ -265,7 +266,7 @@ async def _heartbeat_loop(
     started = time.time()
     while True:
         try:
-            st = hl_adapter.status()
+            st = lb_adapter.status()
             await asyncio.to_thread(
                 trader_store.publish_heartbeat,
                 started_at=started,
@@ -284,7 +285,7 @@ async def _heartbeat_loop(
 
 async def _simulation_loop(
     bn_adapter: BinanceOrderFlowAdapter,
-    hl_adapter: HyperliquidCopyTrader,
+    lb_adapter: BinanceLeaderboardTrader,
     positions: dict,
 ) -> None:
     """Dashboard-Testaufträge über exakt denselben Signal-Handler ausführen."""
@@ -309,7 +310,7 @@ async def _simulation_loop(
                     "SIMULATION", result, wallet=wallet, symbol=symbol, level="error",
                 )
                 continue
-            if not hl_adapter.is_copied(wallet):
+            if not lb_adapter.is_copied(wallet):
                 result = "Abgelehnt: Trader wird nicht mehr kopiert"
                 trader_store.finish_simulation(request["id"], False, result)
                 continue
@@ -332,7 +333,7 @@ async def _simulation_loop(
             )
             try:
                 success = await handle_copy_signal(
-                    signal, bn_adapter, positions, hl_adapter,
+                    signal, bn_adapter, positions, lb_adapter,
                 )
                 result = (
                     f"PAPER-{action} erfolgreich über die Copy-Pipeline ausgeführt"
@@ -354,7 +355,7 @@ async def handle_copy_signal(
     sig: CopySignal,
     bn_adapter: BinanceOrderFlowAdapter,
     positions: dict,
-    hl_adapter: Optional[HyperliquidCopyTrader] = None,
+    lb_adapter: Optional[BinanceLeaderboardTrader] = None,
 ) -> bool:
     """Process one copy signal — open or close on Binance."""
     symbol = sig.symbol
@@ -441,13 +442,13 @@ async def handle_copy_signal(
 
     # All checks passed — execute!
     size_usdt = POSITION_SIZE
-    if hl_adapter is not None:
-        override = hl_adapter.get_copy_size(sig.trader)
+    if lb_adapter is not None:
+        override = lb_adapter.get_copy_size(sig.trader)
         if override and override > 0:
             size_usdt = override
     logger.success(
         f"[COPY] ✅ COPY {sig.coin} | {sig.trader_short} | "
-        f"HL: ${sig.size_usd:,.0f} {sig.leverage:.0f}x | "
+        f"Trader: ${sig.size_usd:,.0f} {sig.leverage:.0f}x | "
         f"BN: ${size_usdt} @ ${price:.4f}"
     )
 
@@ -476,11 +477,11 @@ async def handle_copy_signal(
         "order_id":       order.get("orderId", ""),
         "dry_run":        DRY_RUN,
         "source":         "COPY",
-        "hl_trader":      sig.trader_short,
-        "hl_trader_full": sig.trader,
-        "hl_coin":        sig.coin,
-        "hl_size_usd":    sig.size_usd,
-        "hl_leverage":    sig.leverage,
+        "trader":         sig.trader_short,
+        "trader_full":    sig.trader,
+        "coin":           sig.coin,
+        "size_usd":       sig.size_usd,
+        "leverage":       sig.leverage,
     }
     positions[symbol] = pos_data
     _save_positions(positions)
@@ -530,7 +531,7 @@ async def handle_copy_signal(
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 async def main_loop() -> None:
-    """Copy-Trader main loop: HL signals → Binance execution."""
+    """Copy-Trader main loop: Binance-Leaderboard-Signale → Binance-Spot-Ausführung."""
     logger.info(
         f"[INIT] Copy-Trader gestartet | "
         f"{'PAPER' if DRY_RUN else 'LIVE'} | Standard ${POSITION_SIZE:,.0f}/Trade | "
@@ -550,7 +551,7 @@ async def main_loop() -> None:
     # publish_state=True: nur dieser Prozess schreibt Tracking-Telemetrie in die
     # DB — das Dashboard liest sie und zeigt damit den ECHTEN Bot-Zustand,
     # nicht den seines eigenen Adapter-Objekts.
-    hl_adapter = HyperliquidCopyTrader(publish_state=True)
+    lb_adapter = BinanceLeaderboardTrader(publish_state=True)
     bn_adapter = BinanceOrderFlowAdapter()
 
     # Load existing positions
@@ -572,13 +573,13 @@ async def main_loop() -> None:
             pass
 
     # Start adapters
-    asyncio.create_task(hl_adapter.start())
-    asyncio.create_task(hl_adapter.cleanup_loop())
+    asyncio.create_task(lb_adapter.start())
+    asyncio.create_task(lb_adapter.cleanup_loop())
     asyncio.create_task(bn_adapter.start())
     asyncio.create_task(bn_adapter.cleanup_loop())
     asyncio.create_task(_close_request_loop(bn_adapter, positions))
-    asyncio.create_task(_heartbeat_loop(hl_adapter, positions))
-    asyncio.create_task(_simulation_loop(bn_adapter, hl_adapter, positions))
+    asyncio.create_task(_heartbeat_loop(lb_adapter, positions))
+    asyncio.create_task(_simulation_loop(bn_adapter, lb_adapter, positions))
     if DRY_RUN:
         asyncio.create_task(_paper_monitor(bn_adapter, positions))
 
@@ -592,13 +593,13 @@ async def main_loop() -> None:
         while True:
             await asyncio.sleep(15)
             count += 1
-            hl_st = hl_adapter.status()
-            copied = hl_st.get("copied_traders", 0)
+            lb_st = lb_adapter.status()
+            copied = lb_st.get("copied_traders", 0)
             if not positions:
                 continue
             logger.info(
                 f"── #{count} | Kopiert:{copied} Trader "
-                f"({hl_st.get('ws_subscribed', 0)} per WebSocket verbunden) | "
+                f"({lb_st.get('poll_count', 0)} Polls) | "
                 f"Meine Positionen:{len(positions)}/{MAX_POSITIONS} ──"
             )
             if not positions:
@@ -614,28 +615,28 @@ async def main_loop() -> None:
                     pnl = size * gain / 100
                     mark = "🟢" if pnl >= 0 else "🔴"
                     logger.info(
-                        f"   {mark} {symbol} | {pos.get('hl_trader', '?')} | "
+                        f"   🟢 {symbol} | {pos.get('trader', '?')} | "
                         f"${size:.0f} | entry ${entry:.4f} → ${price:.4f} | "
                         f"PnL ${pnl:+.2f} ({gain:+.2f}%) | {held/60:.1f}min"
                     )
                 else:
                     logger.info(
-                        f"   ⚪️ {symbol} | {pos.get('hl_trader', '?')} | "
+                        f"   ⚪️ {symbol} | {pos.get('trader', '?')} | "
                         f"${size:.0f} | entry ${entry:.4f} | kein Preis | {held/60:.1f}min"
                     )
 
     asyncio.create_task(_status())
 
-    # ── Event loop: react to HL signals ───────────────────────────────────────
+    # ── Event loop: react to Binance-Leaderboard signals ───────────────────────────────────────
     while True:
         if os.path.exists("STOP_BOT"):
             logger.warning("STOP_BOT detected — stopping.")
             break
 
-        sig = await hl_adapter.signal_queue.get()
+        sig = await lb_adapter.signal_queue.get()
         # Zwischen Signal und Verarbeitung kann der Trader im Dashboard
         # abgeschaltet worden sein — dann darf keine Order mehr rausgehen.
-        if not hl_adapter.is_copied(sig.trader):
+        if not lb_adapter.is_copied(sig.trader):
             logger.debug(
                 f"[COPY] Signal {sig.signal} {sig.symbol} verworfen — "
                 f"{sig.trader_short} wird nicht mehr kopiert"
@@ -653,7 +654,7 @@ async def main_loop() -> None:
             continue
         trader_store.log_event(
             "SIGNAL",
-            f"{sig.signal} {sig.coin} | HL ${sig.size_usd:,.0f} {sig.leverage:.0f}x",
+            f"{sig.signal} {sig.coin} | ${sig.size_usd:,.0f} {sig.leverage:.0f}x",
             wallet=sig.trader, symbol=sig.symbol,
         )
-        await handle_copy_signal(sig, bn_adapter, positions, hl_adapter)
+        await handle_copy_signal(sig, bn_adapter, positions, lb_adapter)

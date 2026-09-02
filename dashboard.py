@@ -1,5 +1,5 @@
 """
-Hyperliquid Copy-Trader Dashboard — entry point.
+Binance Copy-Trader Dashboard — entry point.
 All tab logic lives in dashboard/tabs/*.py
 """
 import streamlit as st
@@ -14,7 +14,7 @@ from dashboard.config import DASHBOARD_CSS  # noqa: E402
 from dashboard.tabs import render_copytrader  # noqa: E402
 
 st.set_page_config(
-	page_title="Hyperliquid Copy-Trader",
+	page_title="Binance Copy-Trader",
 	layout="wide",
 	page_icon="🔄",
 	initial_sidebar_state="collapsed",

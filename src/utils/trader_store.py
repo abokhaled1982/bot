@@ -7,8 +7,8 @@ WARUM EINE DATENBANK UND KEINE JSON-DATEIEN
 Betriebssystem-Prozesse**. Sie teilen keine Python-Objekte. Alles, was der
 Nutzer im Frontend auswählt, muss deshalb an einem Ort liegen, den der Bot
 *zur Laufzeit erneut liest* — sonst wirkt eine Änderung erst nach Neustart.
-Genau das war der Fehler der alten JSON-Dateien: sie wurden nur einmal in
-`HyperliquidCopyTrader.__init__` eingelesen.
+Genau das war der Fehler der alten JSON-Dateien: sie wurden nur einmal beim
+Adapter-Start eingelesen.
 
 DATENFLUSS
 ----------
@@ -41,11 +41,6 @@ import time
 from typing import Any, Optional
 
 DB_PATH = os.getenv("BOT_DB_PATH", "binance_orderflow.db")
-
-# Legacy-JSON-Dateien; werden einmalig in die DB übernommen und danach ignoriert.
-_LEGACY_ACTIVE = os.getenv("HL_ACTIVE_WALLETS_FILE", "hl_active_traders.json")
-_LEGACY_FOCUS = os.getenv("HL_FOCUS_WALLET_FILE", "hl_focus_wallet.json")
-_LEGACY_SIZES = os.getenv("HL_COPY_SIZES_FILE", "hl_copy_sizes.json")
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS copy_traders (
@@ -132,11 +127,10 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Idempotent: Schema anlegen und Legacy-JSON einmalig übernehmen."""
+    """Idempotent: Schema anlegen, falls noch nicht vorhanden."""
     with _connect() as conn:
         for stmt in _SCHEMA:
             conn.execute(stmt)
-    _migrate_legacy_json()
 
 
 # ── copy_traders (Dashboard schreibt, Bot liest) ─────────────────────────────
@@ -252,11 +246,9 @@ def get_focus() -> Optional[str]:
 def save_verification(wallet: str, metrics: dict[str, Any]) -> None:
     """Den exakten Scanner-Befund zum Zeitpunkt der Übernahme speichern."""
     snapshot_keys = (
-        "quality_score", "account_value", "day_pnl", "week_pnl", "month_pnl",
-        "trades", "active_days", "win_rate", "profit_factor",
-        "max_drawdown", "max_drawdown_pct", "long_trades", "long_net_pnl",
-        "long_profit_factor", "long_share", "avg_hold_sec", "last_active_age",
-        "verification_window", "metrics_source",
+        "quality_score", "day_roi", "day_pnl", "week_roi", "week_pnl",
+        "month_roi", "month_pnl", "follower_count", "position_shared",
+        "last_active_age", "metrics_source",
     )
     snapshot = {key: metrics.get(key) for key in snapshot_keys}
     with _connect() as conn:
@@ -502,47 +494,3 @@ def recent_simulations(wallet: str = "", limit: int = 20) -> list[dict[str, Any]
     except sqlite3.Error:
         return []
 
-
-# ── Einmalige Migration der alten JSON-Dateien ───────────────────────────────
-
-def _migrate_legacy_json() -> None:
-    """Übernimmt hl_active_traders/hl_focus_wallet/hl_copy_sizes einmalig.
-
-    Läuft nur, solange `copy_traders` leer ist — danach ist die DB führend und
-    die JSON-Dateien werden nicht mehr gelesen oder geschrieben.
-    """
-    with _connect() as conn:
-        count = conn.execute("SELECT COUNT(*) AS n FROM copy_traders").fetchone()["n"]
-    if count:
-        return
-
-    def _read(path: str, fallback):
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return fallback
-
-    active = _read(_LEGACY_ACTIVE, [])
-    sizes = _read(_LEGACY_SIZES, {})
-    focus_raw = _read(_LEGACY_FOCUS, {})
-    focus = focus_raw.get("wallet") if isinstance(focus_raw, dict) else None
-
-    wallets = set(active if isinstance(active, list) else [])
-    wallets |= set(sizes if isinstance(sizes, dict) else {})
-    if focus:
-        wallets.add(focus)
-    for wallet in wallets:
-        if not isinstance(wallet, str) or not wallet.strip():
-            continue
-        try:
-            size = float(sizes.get(wallet)) if isinstance(sizes, dict) and sizes.get(wallet) else None
-        except (TypeError, ValueError):
-            size = None
-        upsert_trader(
-            wallet,
-            size_usdt=size,
-            is_copied=wallet in (active if isinstance(active, list) else []),
-            is_focus=wallet == focus,
-            source="legacy_json",
-        )

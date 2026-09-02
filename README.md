@@ -1,6 +1,6 @@
-# Hyperliquid Copy-Trader Bot
+# Binance Copy-Trader Bot
 
-> **Status:** Standardmaessig Paper Trading (`DRY_RUN=True`). Hyperliquid liefert nur Signale (kein Key noetig); Binance-Spot-Orders gehen nur bei deaktiviertem Paper-Modus tatsaechlich raus.
+> **Status:** Standardmaessig Paper Trading (`DRY_RUN=True`). Binance liefert Signale ueber sein eigenes (inoffizielles) Futures-Leaderboard; Binance-Spot-Orders gehen nur bei deaktiviertem Paper-Modus tatsaechlich raus.
 
 ---
 
@@ -14,91 +14,80 @@
 6. [Starten](#6-starten)
 7. [Paper- und Live-Modus](#7-paper--und-live-modus)
 8. [Datei-Struktur](#8-datei-struktur)
-9. [Hyperliquid API: Rate-Limits, WebSocket & Performance](#9-hyperliquid-api-rate-limits-websocket--performance)
+9. [Binance Leaderboard: inoffizielle API & Grenzen](#9-binance-leaderboard-inoffizielle-api--grenzen)
 
 ---
 
 ## 1. Strategie-Uebersicht
 
-Der Bot kopiert die Positionen erfolgreicher Trader auf Hyperliquid (vollstaendig on-chain, oeffentliche API) und fuehrt die entsprechenden Trades auf Binance Spot aus. Hyperliquid dient **ausschliesslich als Signalquelle** — es findet dort keine eigene Ausfuehrung statt.
+Der Bot findet profitable Intraday-Trader ueber Binances eigenes Copy-Trading-Leaderboard (Futures) und kopiert ihre Positionen auf Binance Spot. Es wird **nur noch Binance** genutzt — sowohl als Signalquelle als auch zur Ausfuehrung, kein zweiter Exchange mehr noetig.
 
 ```
-Getrackter Trader oeffnet BTC Long auf Hyperliquid
+Getrackter Trader oeffnet BTC Long (Binance Futures, oeffentlich geteilt)
         ↓
     COPY_OPEN_LONG Signal
         ↓
-    Binance-Marktcheck: BTCUSDT liquide? Spread ok? Position schon offen?
+    Binance-Spot-Marktcheck: BTCUSDT liquide? Spread ok? Position schon offen?
         ↓ OK
-    Market-BUY auf Binance + OCO-Exit (Take-Profit / Stop-Loss)
+    Market-BUY auf Binance Spot + OCO-Exit (Take-Profit / Stop-Loss)
 
 Getrackter Trader schliesst die Position
         ↓
-    COPY_CLOSE_LONG Signal → Market-SELL auf Binance
+    COPY_CLOSE_LONG Signal → Market-SELL auf Binance Spot
 ```
 
-Binance wird dabei weiterhin gebraucht: Der `BinanceOrderFlowAdapter` liefert Live-Ticker und Orderbuch, um vor jeder Kopie Liquiditaet, Spread und Handelbarkeit des Coins zu pruefen (`check_binance_market`).
+Der `BinanceOrderFlowAdapter` liefert weiterhin Live-Ticker, um vor jeder Kopie Liquiditaet, Spread und Handelbarkeit des Coins zu pruefen (`check_binance_market`).
 
 Getrackte Trader kommen aus zwei Quellen:
-- **Auto-Discovery** — der Bot durchsucht das Hyperliquid-Leaderboard automatisch und periodisch (siehe [Kapitel 2](#2-auto-discovery)).
-- **Manuelle Auswahl** — du suchst im Dashboard selbst nach Tradern und aktivierst sie gezielt (siehe [Kapitel 3](#3-manuelle-trader-suche-dashboard)).
+- **Auto-Discovery** — der Bot durchsucht das Binance-Leaderboard automatisch und periodisch nach guten Intraday-Tradern (siehe [Kapitel 2](#2-auto-discovery)).
+- **Manuelle Auswahl** — du suchst im Dashboard-Scanner selbst nach Tradern und aktivierst sie gezielt (siehe [Kapitel 3](#3-dashboard-im-detail)).
 
 ---
 
 ## 2. Auto-Discovery
 
-Ist `HL_AUTO_DISCOVER=True` (Standard), scannt der Bot beim Start und danach alle `HL_RESCAN_HOURS` Stunden das oeffentliche Hyperliquid-Leaderboard nach aktiven Scalpern:
+Ist `BNLB_AUTO_DISCOVER=True` (Standard), scannt der Bot beim Start und danach alle `BNLB_RESCAN_HOURS` Stunden Binances oeffentliches Leaderboard nach Tradern, die **innerhalb eines Tages mit gutem Profit handeln**:
 
 ```
-1. Leaderboard laden (stats-data.hyperliquid.xyz)
-2. Nach 24h-Volumen vorsortieren → Top HL_DISCOVERY_POOL Kandidaten
-3. Pro Kandidat die Fills laden und daraus ableiten:
-     - Anzahl geschlossener Trades
-     - Win-Rate (closedPnl > 0)
-     - durchschnittliche Haltezeit (Open → Close pro Coin)
-     - letzte Aktivitaet
-4. Filtern nach HL_MIN_TRADES, HL_MIN_WIN_RATE, HL_MAX_AVG_HOLD_SEC,
-   HL_MIN_ACCOUNT_USD, HL_ACTIVE_WITHIN_HOURS
-5. Top HL_MAX_TRADERS nach Win-Rate auswaehlen und tracken
+1. Tages-Leaderboard laden (periodType=DAILY, ROI-sortiert) → Kandidaten-Pool
+2. Denselben Pool zusaetzlich nach PNL sowie 7-Tage-/30-Tage-Ranglisten abfragen,
+   um Konsistenz zu pruefen (keine Eintagsfliegen)
+3. Filtern nach BNLB_MIN_DAY_ROI_PCT, BNLB_MIN_DAY_PNL_USD,
+   BNLB_MIN_FOLLOWERS, positiver 7T-/30T-Performance, Positionen oeffentlich
+   geteilt, innerhalb BNLB_ACTIVE_WITHIN_HOURS aktiv
+4. Top BNLB_MAX_TRADERS nach Quality-Score auswaehlen und tracken
 ```
 
-Manuell aktivierte Trader (env `HL_TRADER_WALLETS` oder per Dashboard) werden von einem Rescan nie entfernt.
+Manuell aktivierte Trader (env `BNLB_TRADER_UIDS` oder per Dashboard) werden von einem Rescan nie entfernt.
 
-Alle Hyperliquid-Requests laufen gedrosselt (`HL_MIN_REQUEST_INTERVAL`) und mit Backoff bei `429`, um Rate-Limits zu vermeiden. Waehrend ein Scan laeuft, zeigt das Dashboard das im Status-Feld `discovering` an (siehe Kapitel 3) — das kann beim ersten Start bzw. nach einem Rescan **30–90 Sekunden** dauern (Grund dafuer in [Kapitel 9](#9-hyperliquid-api-rate-limits-websocket--performance)).
+Alle Binance-Leaderboard-Requests laufen gedrosselt (`BNLB_MIN_REQUEST_INTERVAL`) und mit Backoff bei `429`, um Rate-Limits zu vermeiden (siehe [Kapitel 9](#9-binance-leaderboard-inoffizielle-api--grenzen)).
 
 ---
 
 ## 3. Dashboard im Detail
 
-`streamlit run dashboard.py` oeffnet ein Kontrollzentrum mit 5 Tabs (`dashboard/tabs/copytrader.py`):
+`streamlit run dashboard.py` oeffnet ein Kontrollzentrum mit 4 Tabs (`dashboard/tabs/copytrader.py`):
 
-### 📊 Übersicht
-- Live-KPIs (alle 3s aktualisiert): Verbindungsstatus (`LIVE` / `SUCHT TRADER…` / `CONNECTING`), Anzahl getrackter Trader, offene Positionen + Gesamt-Exposure, Gesamt-PnL (unrealisiert, ueber alle getrackten Trader), Auto-Discovery-Status inkl. naechstem Rescan.
-- Waehrend eines Leaderboard-Scans erscheint ein Hinweis-Banner statt eines mehrdeutigen "CONNECTING".
-- Tabelle aller offenen Positionen aller getrackten Trader (Coin, Seite, Wert, Entry, Hebel, PnL%, PnL$).
-- Letzte 10 Copy-Signale als Live-Feed.
-- Eigene Binance-Positionen (`positions.json`) als Rohdaten.
-
-### 🔍 Trader-Suche
-- Leaderboard nach Zeitfenster (1 Tag/Woche/Monat/Gesamt) durchsuchen, unabhaengig von den Auto-Discovery-Schwellwerten.
-- Filter: Min. Win-Rate, Min. Trades, Max. Ø Haltezeit, Min. Account-Wert, Kandidatenzahl.
-- Ergebnisse sortierbar nach PnL, Win-Rate, **Volumen (Liquiditaet)**, Trades oder Account-Wert.
-- Fortschrittsbalken waehrend der Suche (Kandidat X/Y), da die Abfrage pro Kandidat gedrosselt ist (siehe Kapitel 9).
-- Copy-Trading per Checkbox direkt in der Ergebnistabelle aktivieren/deaktivieren.
-- **Explorer-Link** pro Trader (`hl_explorer_url`) zur manuellen Verifikation auf `app.hyperliquid.xyz/explorer`.
+### 🏠 Übersicht
+- Live-KPIs (alle 3s aktualisiert): Binance-Guthaben, eigene offene Trades, realisierter PnL, Anzahl kopierter Trader.
+- Bot-Prozess-Status, Tracking-Status, letzter Trader-Fill.
+- Eigene offene Trades + Live-Feed der Pipeline-Entscheidungen.
 
 ### 👥 Meine Trader
-- Wallet-Adresse manuell hinzufuegen (sofortiges Tracking + Copy-Trading).
-- Uebersicht aller getrackten Trader: Quelle (env/manuell/auto), Account-Wert, Fills, offene Positionen, Exposure, PnL, Explorer-Link.
-- Entfernen-Button pro Trader (env-Wallets aus `HL_TRADER_WALLETS` sind geschuetzt und koennen nur per `.env` entfernt werden).
+- Trader-UID manuell hinzufuegen (sofortiges Tracking + Copy-Trading).
+- Uebersicht aller getrackten Trader: Betrag/Trade, eigener PnL, offene Trades, Trader-uPnL, Tracking-Status.
+- Details je Trader: eigene Trades, Tracking-Nachweis, aktuelle Trader-Positionen (falls oeffentlich geteilt), Scanner-Verifikation.
+- Entfernen-Button pro Trader (env-UIDs aus `BNLB_TRADER_UIDS` sind geschuetzt und koennen nur per `.env` entfernt werden).
 
-### 📡 Signale
-- Voller Signal-Log mit Filter nach Symbol und Signal-Typ (`COPY_OPEN_LONG`, `COPY_CLOSE_LONG`, …).
+### 🔍 Scanner
+- Findet Trader, die **innerhalb eines Tages mit gutem Profit** handeln (Tages-ROI/-PnL-Schwellen), geprueft gegen 7-Tage-/30-Tage-Konsistenz.
+- Filter: Min. Tages-ROI, Min. Tages-PnL, Min. Follower, Max. Ergebnisse.
+- Ergebnisse sortierbar nach Quality-Score, Tages-ROI, Tages-PnL oder Follower.
+- Link zum oeffentlichen Binance-Leaderboard-Profil pro Trader zur manuellen Gegenpruefung.
+- Copy-Trading per Formular direkt uebernehmen.
 
-### ⚙️ Einstellungen
-- **Live editierbar:** Polling-Intervall (`HL_POLL_INTERVAL`) und Min. Copy-Groesse (`HL_MIN_COPY_SIZE_USD`) — Aenderungen wirken sofort, ohne Neustart.
-- **Nur lesend** (aus `.env`): Auto-Discovery-Status, Max. Trader, Rescan-Intervall, Min. Trades/Win-Rate/Account-Wert, Max. Haltezeit, Signal-TTL, Metrik-Cache-Dauer.
-
-Aktivierte Trader werden in `hl_active_traders.json` gespeichert und ueberleben einen Bot-Neustart.
+### ⚙️ Setup
+- Bot-Prozess-Status, Konfiguration aus der `.env` (nur lesend), Pipeline-Protokoll zum Debuggen.
 
 ---
 
@@ -113,6 +102,8 @@ Aktivierte Trader werden in `hl_active_traders.json` gespeichert und ueberleben 
 | `COPY_DECREASE` | Trader hat die Position um >5% reduziert |
 
 Vor jeder Kopie prueft `check_binance_market`: 24h-Volumen (`BN_MIN_VOLUME_24H`), Datenaktualitaet, Spread (`SCALP_MAX_SPREAD_BPS`). Positionsgroesse ist fix (`BINANCE_POSITION_SIZE_USDT`), begrenzt durch `BINANCE_MAX_POSITIONS`. Exit erfolgt per OCO (`BINANCE_STOP_LOSS_PCT` / `BINANCE_TAKE_PROFIT_PCT`) oder wenn der kopierte Trader selbst schliesst.
+
+Positionen eines Traders sind nur sichtbar, wenn er sie auf Binance oeffentlich teilt (`positionShared`). Ohne geteilte Positionen kann der Bot nur die Leaderboard-Kennzahlen sehen, aber keine Live-Signale fuer diesen Trader erzeugen.
 
 Im Paper-Modus wird kein Auftrag an Binance gesendet. Der Bot simuliert Kauf/Verkauf, protokolliert PnL in `binance_orderflow.db` und verwaltet offene Positionen in `positions.json`.
 
@@ -137,25 +128,27 @@ BINANCE_TAKE_PROFIT_PCT=1.5
 BN_MIN_VOLUME_24H=5000000       # Min. 24h-Volumen fuer Binance-Markt-Check
 SCALP_MAX_SPREAD_BPS=5
 
-# ── Hyperliquid Copy-Trader ───────────────────────────────
-HL_TRADER_WALLETS=              # Kommagetrennte Wallets, immer getrackt
-HL_POLL_INTERVAL=5              # Sekunden zwischen Positions-Polls
-HL_MIN_COPY_SIZE_USD=1000       # Mindestgroesse fuer ein Open-Signal
-HL_SIGNAL_TTL=60.0
+# ── Binance-Leaderboard Copy-Trader ───────────────────────
+BNLB_TRADER_UIDS=               # Kommagetrennte encryptedUids, immer getrackt
+BNLB_POLL_INTERVAL=5            # Sekunden zwischen Positions-Polls
+BNLB_MIN_COPY_SIZE_USD=1000     # Mindestgroesse fuer ein Open-Signal
+BNLB_SIGNAL_TTL=60.0
 
-# ── Auto-Discovery ────────────────────────────────────────
-HL_AUTO_DISCOVER=True
-HL_MAX_TRADERS=5                # Max. automatisch getrackte Trader
-HL_RESCAN_HOURS=6
-HL_MIN_TRADES=100
-HL_MIN_WIN_RATE=0.55
-HL_MIN_ACCOUNT_USD=10000
-HL_MAX_AVG_HOLD_SEC=1800        # Bevorzugt Scalper (kurze Haltezeit)
-HL_ACTIVE_WITHIN_HOURS=24
-HL_DISCOVERY_POOL=25
-HL_MIN_REQUEST_INTERVAL=2.0     # Drosselung gegen HL-429-Limits
-HL_METRICS_CACHE_TTL=300        # Sekunden: Cache fuer Win-Rate/Trades/Haltezeit pro Wallet
-HL_ACTIVE_WALLETS_FILE=hl_active_traders.json
+# ── Auto-Discovery ("Trader finden, die innerhalb eines Tages
+#    mit gutem Profit handeln") ───────────────────────────
+BNLB_AUTO_DISCOVER=True
+BNLB_MAX_TRADERS=5               # Max. automatisch getrackte Trader
+BNLB_RESCAN_HOURS=6
+BNLB_MIN_DAY_ROI_PCT=3.0         # Mindest-Tages-ROI in %
+BNLB_MIN_DAY_PNL_USD=50          # Mindest-Tages-PnL in USD
+BNLB_MIN_FOLLOWERS=0
+BNLB_REQUIRE_POSITION_SHARED=True
+BNLB_REQUIRE_POSITIVE_WEEK=True
+BNLB_REQUIRE_POSITIVE_MONTH=True
+BNLB_ACTIVE_WITHIN_HOURS=24
+BNLB_DISCOVERY_POOL=50
+BNLB_MIN_REQUEST_INTERVAL=1.0    # Drosselung gegen Rate-Limits
+BNLB_METRICS_CACHE_TTL=300
 ```
 
 ---
@@ -175,6 +168,12 @@ streamlit run dashboard.py
 # → http://localhost:8501
 ```
 
+```bash
+# Optional — Trader ohne Dashboard direkt in der Konsole finden
+source venv/bin/activate
+python3 find_traders.py
+```
+
 ---
 
 ## 7. Paper- und Live-Modus
@@ -182,7 +181,7 @@ streamlit run dashboard.py
 > [!CAUTION]
 > Nur wenn du genau weißt was du tust. Echtes Geld kann verloren gehen.
 
-**Paper-Modus:** Bei `DRY_RUN=True` sind keine Binance-API-Schluessel erforderlich. Der Bot nutzt reale Marktdaten und Hyperliquid-Signale, simuliert Kauf/Verkauf und protokolliert alles lokal.
+**Paper-Modus:** Bei `DRY_RUN=True` sind keine Binance-API-Schluessel erforderlich. Der Bot nutzt reale Marktdaten und Binance-Leaderboard-Signale, simuliert Kauf/Verkauf und protokolliert alles lokal.
 
 **Live-Modus:** Bei `DRY_RUN=False` braucht das Binance-Spot-Konto ausreichend USDT sowie `BINANCE_API_KEY` und `BINANCE_SECRET` mit Spot-Trading-Berechtigung. Withdrawal muss deaktiviert bleiben; eine IP-Whitelist ist dringend zu empfehlen.
 
@@ -202,15 +201,15 @@ BINANCE_STOP_LOSS_PCT=2.0       # Immer Stop-Loss aktiv lassen
 ```
 bot/
 ├── main.py                              # Entry point (Copy-Trader Pipeline)
+├── find_traders.py                      # CLI: Intraday-Trader ohne Dashboard finden
 ├── .env                                 # Konfiguration & API Keys
 ├── binance_orderflow.db                 # SQLite: Trades + Logs
 ├── positions.json                       # Aktuelle offene Positionen
-├── hl_active_traders.json               # Manuell aktivierte Hyperliquid-Trader
 │
 ├── src/
 │   ├── adapters/
 │   │   ├── binance_orderflow.py         Binance Ticker/Orderbuch (Liquiditaets-Check)
-│   │   └── hyperliquid_copytrader.py    Auto-Discovery + Positions-Polling + Signale + WS
+│   │   └── binance_leaderboard.py       Auto-Discovery + Positions-Polling + Signale
 │   │
 │   ├── bot/
 │   │   └── copytrader_pipeline.py       Signal-Verarbeitung + Binance-Ausfuehrung
@@ -218,29 +217,33 @@ bot/
 │   └── execution/
 │       └── binance_executor.py          Binance REST Market- und OCO-Orders
 │
+├── tests/
+│   └── test_binance_leaderboard.py      Tests fuer Trader-Finder/Filter-Logik
+│
 └── dashboard/
     ├── config.py                         Farben/CSS fuer das Dashboard
     └── tabs/
-        └── copytrader.py                 5 Tabs: Übersicht, Suche, Meine Trader, Signale, Einstellungen
+        └── copytrader.py                 4 Tabs: Übersicht, Meine Trader, Scanner, Setup
 ```
 
 ---
 
-## 9. Hyperliquid API: Rate-Limits, WebSocket & Performance
+## 9. Binance Leaderboard: inoffizielle API & Grenzen
 
-Die oeffentliche Hyperliquid-API ist kostenlos und braucht keinen Key, ist dafuer aber pro IP rate-limitiert (offizielle Doku: [Rate limits and user limits](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits)):
+Binance veroeffentlicht fuer sein Copy-Trading-Leaderboard **kein offizielles, dokumentiertes API**. `src/adapters/binance_leaderboard.py` nutzt dieselben `bapi`-Endpunkte, die `binance.com/*/futures-activities/leaderboard` im Browser aufruft:
 
-- **1200 Weight/Minute** pro IP fuer `info`-Requests.
-- `clearinghouseState` (Positions-Poll) kostet nur **Weight 2** — unkritisch, laeuft alle `HL_POLL_INTERVAL` Sekunden pro getracktem Wallet.
-- `userFills` (fuer Win-Rate/Trades/Haltezeit bei Discovery & Suche) kostet **20 + 1 pro 20 zurueckgegebene Fills** — bei aktiven Scalpern mit bis zu 2000 Fills sind das **bis zu 120 Weight pro Aufruf**. Schon 10 solcher Calls pro Minute reizen das Budget voll aus.
+- `getLeaderboardRank` — Top-Trader je Zeitfenster (Tag/Woche/Monat) und Metrik (ROI/PnL). Gut dokumentiert durch zahlreiche Community-Projekte, deshalb die zuverlaessigste Datenquelle.
+- `getOtherPosition` — aktuell offene Positionen eines Traders, **nur wenn er sie oeffentlich geteilt hat** (`positionShared=true`). Ohne Sharing gibt es fuer diesen Trader keine Live-Copy-Signale.
 
-**Warum die Trader-Suche/Discovery 30–90s dauert:** Jeder Kandidat braucht einen eigenen `userFills`-Call, gedrosselt auf `HL_MIN_REQUEST_INTERVAL` (Standard 2s) Abstand. Bei 15–25 Kandidaten ergibt das allein schon 30–50s; kommt es dazwischen zu `429` (Rate-Limit ueberschritten), wartet der Bot zusaetzlich per Exponential-Backoff. Das ist kein Bug der API, sondern die erwartete Kehrseite eines kostenlosen, oeffentlichen Endpoints.
+**Wichtige Einschraenkung gegenueber der fruehreren Hyperliquid-Anbindung:** Binance liefert **keine** oeffentliche Trade-fuer-Trade-Historie (kein Aequivalent zu Hyperliquids `userFills`). Kennzahlen wie Profit-Faktor, Drawdown, durchschnittliche Haltezeit oder Win-Rate pro Einzeltrade lassen sich deshalb **nicht** berechnen. Die Verifikation stuetzt sich stattdessen auf das, was Binance tatsaechlich oeffentlich macht: Tages-/Wochen-/Monats-ROI und -PnL, Follower-Zahl und ob Positionen geteilt werden.
+
+**Da die API inoffiziell ist:**
+- Sie kann sich jederzeit ohne Ankuendigung aendern — Feld-Extraktion ist bewusst defensiv (`.get()` mit Fallbacks), stuerzt bei fehlenden Feldern nicht ab, liefert dann aber ggf. leere Ergebnisse.
+- Es gibt kein SLA und kein offizielles Rate-Limit-Dokument. `BNLB_MIN_REQUEST_INTERVAL` drosselt defensiv, Backoff greift bei `429`.
+- Es gibt keine oeffentliche WebSocket-API fuer fremde Trader-Positionen — Tracking laeuft ausschliesslich per Polling (`BNLB_POLL_INTERVAL`).
 
 **Was der Bot deshalb tut:**
-1. **Drosselung + Backoff** (`_hl_request`, `HL_MIN_REQUEST_INTERVAL`) — verhindert dauerhafte 429-Sperren.
-2. **Metrik-Cache** (`HL_METRICS_CACHE_TTL`, Standard 5 min) — dieselben Top-Leaderboard-Wallets tauchen in fast jeder Suche/jedem Rescan wieder auf; ihre Fill-Metriken werden nicht erneut abgefragt, solange der Cache gueltig ist.
-3. **WebSocket statt reinem Polling** — der Bot abonniert `userFills` per getracktem Wallet; kommt eine neue Fill-Meldung rein, wird die Position sofort neu abgefragt statt auf den naechsten Poll-Zyklus zu warten. Ein Resubscribe-Loop (alle 10s) sorgt dafuer, dass auch spaeter hinzugefuegte Wallets (manuell oder per Auto-Discovery-Rescan) auf der bestehenden WS-Verbindung mit-abonniert werden, statt nur beim initialen Verbindungsaufbau.
-4. **Fortschrittsanzeige im Dashboard** statt eines scheinbar haengenden Klicks auf "Suchen".
-
-**Es gibt keine bessere Alternative-API fuer Hyperliquid-Trader-Daten** — Hyperliquid ist die einzige Quelle fuer seine eigenen On-Chain-Positionen. Drittanbieter (z. B. Hypurrscan) spiegeln lediglich dieselben Daten mit zusaetzlicher Verzoegerung und ohne offizielle Garantie.
+1. **Drosselung + Backoff** (`_bn_request`, `BNLB_MIN_REQUEST_INTERVAL`) — verhindert dauerhafte 429-Sperren.
+2. **Konsistenzpruefung ueber 3 Zeitfenster** (Tag/Woche/Monat) statt eines einzelnen guten Tages, um Eintagsfliegen auszufiltern.
+3. **Defensive Feld-Extraktion** mit mehreren moeglichen Schluesselnamen, damit kleinere API-Aenderungen nicht sofort zu Abstuerzen fuehren.
 

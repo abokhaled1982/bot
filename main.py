@@ -1,6 +1,7 @@
 """Trading Bot — entry point.
 
-Copies top Hyperliquid traders → executes on Binance Spot.
+Findet gute Intraday-Trader ueber Binances eigenes Leaderboard und kopiert
+sie auf Binance Spot.
 """
 import asyncio
 import os

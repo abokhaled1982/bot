@@ -1,5 +1,5 @@
 """
-dashboard/tabs/copytrader.py — Hyperliquid Copy-Trader Dashboard
+dashboard/tabs/copytrader.py — Binance Leaderboard Copy-Trader Dashboard
 
 ARCHITEKTUR (wichtig zum Debuggen)
 ----------------------------------
@@ -44,8 +44,6 @@ CLOSE_REQUEST_PATH = os.getenv("COPY_CLOSE_REQUEST_FILE", "close_requests.json")
 # Ab diesem Alter gilt der Bot-Heartbeat als tot (der Bot schreibt alle 3s).
 HEARTBEAT_STALE_SEC = 15.0
 
-_WINDOW_LABEL = {"day": "1 Tag", "week": "1 Woche", "month": "1 Monat", "allTime": "Gesamt"}
-
 _EVENT_ICON = {
     "SIGNAL": "📡", "BUY": "🟢", "SELL": "🔴", "SKIP": "⏭️", "ERROR": "❌",
     "SIMULATION": "🧪",
@@ -70,11 +68,11 @@ def _copy_positions() -> dict:
 
 
 def _positions_of(wallet: str, short: str) -> dict:
-    """Eigene offene Positionen, die genau diesem HL-Trader zuzuordnen sind."""
+    """Eigene offene Positionen, die genau diesem Leaderboard-Trader zuzuordnen sind."""
     return {
         sym: p for sym, p in _copy_positions().items()
-        if p.get("hl_trader_full") == wallet
-        or (not p.get("hl_trader_full") and p.get("hl_trader") == short)
+        if p.get("trader_full") == wallet
+        or (not p.get("trader_full") and p.get("trader") == short)
     }
 
 
@@ -186,12 +184,9 @@ def _banner(title: str, text: str, kind: str) -> None:
 
 
 def _verification_links(wallet: str) -> list[tuple[str, str]]:
+    from src.adapters.binance_leaderboard import binance_leaderboard_url
     return [
-        ("Hyperliquid Explorer", f"https://app.hyperliquid.xyz/explorer/address/{wallet}"),
-        ("Hyperdash",            f"https://hyperdash.info/trader/{wallet}"),
-        ("Purrsec",              f"https://purrsec.com/address/{wallet}"),
-        ("HypurrScan",           f"https://hypurrscan.io/address/{wallet}"),
-        ("ASXN",                 f"https://asxn.xyz/user/{wallet}"),
+        ("Binance Leaderboard", binance_leaderboard_url(wallet)),
     ]
 
 
@@ -225,9 +220,9 @@ def _get_adapter(schema_version: int):
     Tracker starten, hätte man doppelte API-Last und zwei Wahrheiten.
     """
     del schema_version
-    from src.adapters import hyperliquid_copytrader
-    module = importlib.reload(hyperliquid_copytrader)
-    return module.HyperliquidCopyTrader(publish_state=False)
+    from src.adapters import binance_leaderboard
+    module = importlib.reload(binance_leaderboard)
+    return module.BinanceLeaderboardTrader(publish_state=False)
 
 
 # ── Entry ────────────────────────────────────────────────────────────────────
@@ -236,10 +231,10 @@ def render():
     adapter = _get_adapter(_ADAPTER_SCHEMA_VERSION)
     adapter.refresh()
 
-    st.markdown('<h2 style="margin-bottom:0;">🔄 Hyperliquid Copy-Trader</h2>',
+    st.markdown('<h2 style="margin-bottom:0;">🔄 Binance Copy-Trader</h2>',
                 unsafe_allow_html=True)
     mode = "📝 PAPER (DRY-RUN)" if _dry_run() else "🔴 LIVE"
-    st.caption(f"Signale von Hyperliquid-Tradern · Ausführung auf Binance Spot · Modus: {mode}")
+    st.caption(f"Signale vom Binance-Leaderboard · Ausführung auf Binance Spot · Modus: {mode}")
 
     bot = _bot_state()
     if not bot["alive"]:
@@ -283,12 +278,12 @@ def _render_overview():
 
         health = bot.get("api_health", "ok")
         if bot["alive"] and health == "rate_limited":
-            _banner("⚠️ Hyperliquid rate-limited",
-                    "Der Bot wartet auf das API-Reset. Tracking läuft weiter, "
+            _banner("⚠️ Binance-Leaderboard rate-limited",
+                    "Der Bot wartet auf das Rate-Limit-Reset. Tracking läuft weiter, "
                     "Kennzahlen kommen kurzzeitig aus dem Cache.", "amber")
         elif bot["alive"] and health == "unreachable":
-            _banner("🔴 Hyperliquid unerreichbar",
-                    "Netzwerkfehler zu api.hyperliquid.xyz — der Bot versucht "
+            _banner("🔴 Binance-Leaderboard unerreichbar",
+                    "Netzwerkfehler zu binance.com — der Bot versucht "
                     "automatisch erneut zu verbinden.", "red")
 
         # ── Zeile 1: Mein Geld ──────────────────────────────────────────
@@ -366,7 +361,7 @@ def _render_overview():
                 st.dataframe(
                     pd.DataFrame([{
                         "Symbol":  sym,
-                        "Trader":  p.get("hl_trader", "?"),
+                        "Trader":  p.get("trader", "?"),
                         "Einsatz": float(p.get("size_usdt", 0)),
                         "Entry":   float(p.get("entry_price", 0)),
                         "Alter":   _fmt_age(now - float(p.get("opened_at", now))),
@@ -458,9 +453,9 @@ def _render_my_traders(adapter):
         history = _history_of(wallet, short)
         realized = sum(float(h.get("pnl_usdt", 0)) for h in history)
         exposure = sum(float(p.get("size_usdt", 0)) for p in my_open.values())
-        hl_positions = (track or {}).get("positions", {})
+        lb_positions = (track or {}).get("positions", {})
         trader_upnl = sum(float(p.get("unrealized_pnl", 0))
-                          for p in hl_positions.values())
+                          for p in lb_positions.values())
 
         with st.container(border=True):
             _trader_header(trader, short, track, bot["alive"], realized,
@@ -476,7 +471,7 @@ def _render_my_traders(adapter):
                 with t_track:
                     _tab_tracking(wallet, track, bot["alive"])
                 with t_detail:
-                    _tab_trader_detail(adapter, wallet, hl_positions)
+                    _tab_trader_detail(adapter, wallet, lb_positions)
                 with t_verify:
                     _tab_verify(wallet)
 
@@ -570,7 +565,7 @@ def _trader_header(trader: dict, short: str, track: dict | None, bot_alive: bool
                      pnl_color), unsafe_allow_html=True)
     h3.markdown(_kpi("📦 Offen", str(open_count), f"${exposure:,.0f} eingesetzt"),
                 unsafe_allow_html=True)
-    h4.markdown(_kpi("🎯 Trader uPnL", f"${trader_upnl:+,.0f}", "auf Hyperliquid",
+    h4.markdown(_kpi("🎯 Trader uPnL", f"${trader_upnl:+,.0f}", "auf Binance Futures",
                      "#00e6a7" if trader_upnl >= 0 else "#ff5c5c"),
                 unsafe_allow_html=True)
     h5.markdown(_kpi("📡 Tracking", badge_sub,
@@ -621,7 +616,7 @@ def _trader_controls(adapter, trader: dict, short: str) -> None:
 
     mode = "📝 DRY-RUN — Orders werden simuliert" if _dry_run() else "🔴 LIVE — echtes Geld"
     st.caption(
-        f"{mode} · Konsolen-Präfix `[HL-{'COPY' if trader['is_copied'] else 'WATCH'}]` "
+        f"{mode} · Konsolen-Präfix `[BN-{'COPY' if trader['is_copied'] else 'WATCH'}]` "
         f"für {short} · Entfernen verkauft offene Positionen dieses Traders"
     )
 
@@ -641,8 +636,8 @@ def _tab_my_trades(my_open: dict, history: list[dict], realized: float) -> None:
                 "Entry":    float(p.get("entry_price", 0)),
                 "Menge":    float(p.get("qty", 0)),
                 "Alter":    _fmt_age(now - float(p.get("opened_at", now))),
-                "HL-Coin":  p.get("hl_coin", ""),
-                "HL-Hebel": float(p.get("hl_leverage", 0)),
+                "Coin":     p.get("coin", ""),
+                "Hebel":    float(p.get("leverage", 0)),
                 "Modus":    "Paper" if p.get("dry_run") else "Live",
             } for sym, p in my_open.items()]),
             width="stretch", hide_index=True,
@@ -650,7 +645,7 @@ def _tab_my_trades(my_open: dict, history: list[dict], realized: float) -> None:
                 "Einsatz":  st.column_config.NumberColumn(format="$%.0f"),
                 "Entry":    st.column_config.NumberColumn(format="$%.4f"),
                 "Menge":    st.column_config.NumberColumn(format="%.6f"),
-                "HL-Hebel": st.column_config.NumberColumn(format="%.0fx"),
+                "Hebel":    st.column_config.NumberColumn(format="%.0fx"),
             },
         )
 
@@ -825,63 +820,53 @@ def _tab_trader_detail(adapter, wallet: str, live_positions: dict) -> None:
     else:
         st.caption("Aktuell keine offene Position bei diesem Trader.")
 
-    if not st.button("📊 Historie & Kennzahlen laden", key=f"deep_{wallet}"):
-        st.caption("Lädt Fills und Win-Rate je Zeitfenster — ein API-Call.")
+    if not st.button("📊 Details laden", key=f"deep_{wallet}"):
+        st.caption("Lädt öffentlich geteilte Positionen vom Binance-Leaderboard — ein API-Call.")
         return
 
-    with st.spinner("Lade Hyperliquid-Daten …"):
+    with st.spinner("Lade Binance-Leaderboard-Daten …"):
         try:
             focus = adapter.get_trader_focus(wallet)
         except Exception as e:
             st.error(f"Daten konnten nicht geladen werden: {e}")
             return
     if focus is None:
-        st.error("Ungültige Wallet-Adresse.")
+        st.error("Ungültige Trader-UID.")
         return
 
-    cols = st.columns(4)
-    for col, name in zip(cols, ("day", "week", "month", "allTime")):
-        metrics = focus["metrics_by_window"].get(name)
-        with col:
-            if metrics is None:
-                st.markdown(_kpi(f"📅 {_WINDOW_LABEL[name]}", "—",
-                                 "keine geschlossenen Trades", "#64748b"),
-                            unsafe_allow_html=True)
-                continue
-            color = ("#00e6a7" if metrics.win_rate >= 0.55
-                     else "#ffb400" if metrics.win_rate >= 0.45 else "#ff5c5c")
-            st.markdown(_kpi(f"📅 {_WINDOW_LABEL[name]}", f"{metrics.win_rate:.0%}",
-                             f"{metrics.trades} Trades · Ø {_fmt_hold(metrics.avg_hold_sec)}",
-                             color), unsafe_allow_html=True)
-
-    st.markdown("<br>**Letzte Fills des Traders**", unsafe_allow_html=True)
-    fills = focus.get("recent_fills", [])
-    if not fills:
-        st.caption("Keine Fills verfügbar.")
-        return
-    now = time.time()
-    st.dataframe(
-        pd.DataFrame([{
-            "Zeitpunkt":  _dt.datetime.fromtimestamp(
-                float(f.get("time", 0)) / 1000.0
-            ).strftime("%d.%m.%Y %H:%M:%S"),
-            "Alter":      _fmt_age(now - float(f.get("time", 0)) / 1000.0),
-            "Coin":       f.get("coin", ""),
-            "Seite":      "BUY" if f.get("side") == "B" else "SELL",
-            "Aktion":     f.get("dir", ""),
-            "Preis":      float(f.get("px", "0") or "0"),
-            "Menge":      float(f.get("sz", "0") or "0"),
-            "Wert USD":   float(f.get("px", "0") or "0")
-                          * float(f.get("sz", "0") or "0"),
-            "Closed PnL": float(f.get("closedPnl", "0") or "0"),
-        } for f in fills]),
-        width="stretch", hide_index=True,
-        column_config={
-            "Preis":      st.column_config.NumberColumn(format="$%.4f"),
-            "Menge":      st.column_config.NumberColumn(format="%.4f"),
-            "Wert USD":   st.column_config.NumberColumn(format="$%.2f"),
-            "Closed PnL": st.column_config.NumberColumn(format="$%+.2f"),
-        },
+    st.markdown(f"**{focus.get('nick_name') or 'Unbenannt'}**")
+    st.caption(
+        f"Getrackt: {'ja' if focus['is_tracked'] else 'nein'} · "
+        f"Aktiv kopiert: {'ja' if focus['is_active'] else 'nein'}"
+    )
+    positions = focus.get("positions", {})
+    if not positions:
+        st.caption("Keine öffentlich geteilten Positionen gefunden.")
+    else:
+        st.dataframe(
+            pd.DataFrame([{
+                "Coin":  coin,
+                "Seite": "LONG" if float(p.get("size", 0)) > 0 else "SHORT",
+                "Wert":  float(p.get("value_usd", 0)),
+                "Entry": float(p.get("entry_px", 0)),
+                "Hebel": float(p.get("leverage", 0)),
+                "PnL %": float(p.get("pnl_pct", 0)),
+                "PnL $": float(p.get("unrealized_pnl", 0)),
+            } for coin, p in positions.items()]),
+            width="stretch", hide_index=True,
+            column_config={
+                "Wert":  st.column_config.NumberColumn(format="$%.0f"),
+                "Entry": st.column_config.NumberColumn(format="$%.4f"),
+                "Hebel": st.column_config.NumberColumn(format="%.0fx"),
+                "PnL %": st.column_config.NumberColumn(format="%+.2f%%"),
+                "PnL $": st.column_config.NumberColumn(format="$%+.0f"),
+            },
+        )
+    st.markdown(
+        f'<a href="{focus["leaderboard_url"]}" target="_blank" '
+        'style="text-decoration:none"><span class="badge-info">'
+        '🔗 Binance-Leaderboard-Profil öffnen ↗</span></a>',
+        unsafe_allow_html=True,
     )
 
 
@@ -892,29 +877,32 @@ def _tab_verify(wallet: str) -> None:
         verified_at = _dt.datetime.fromtimestamp(
             verification["verified_at"]
         ).strftime("%d.%m.%Y %H:%M")
-        st.markdown(f"**Quantitative Verifikation vom {verified_at}**")
+        st.markdown(f"**Scanner-Verifikation vom {verified_at}**")
         v1, v2, v3, v4, v5 = st.columns(5)
         v1.metric("Quality-Score", f"{verification['quality_score']:.1f}/100")
-        v2.metric("Profit-Faktor", f"{float(metrics.get('profit_factor', 0)):.2f}")
-        v3.metric("Long-PF", f"{float(metrics.get('long_profit_factor', 0)):.2f}")
-        v4.metric("Drawdown-Proxy", f"{float(metrics.get('max_drawdown_pct', 0)):.1f}%")
-        v5.metric("PnL 30 Tage", f"${float(metrics.get('month_pnl', 0)):+,.0f}")
+        v2.metric("Tages-ROI", f"{float(metrics.get('day_roi', 0)):+.1f}%")
+        v3.metric("Tages-PnL", f"${float(metrics.get('day_pnl', 0)):+,.0f}")
+        v4.metric("7T-ROI", f"{float(metrics.get('week_roi', 0) or 0):+.1f}%")
+        v5.metric("30T-ROI", f"{float(metrics.get('month_roi', 0) or 0):+.1f}%")
         st.caption(
-            f"{int(metrics.get('trades', 0))} geschlossene Trades · "
-            f"{int(metrics.get('long_trades', 0))} Long-Trades · "
-            f"{float(metrics.get('win_rate', 0)):.0%} Win-Rate · "
-            f"{int(metrics.get('active_days', 0))} aktive Tage · "
-            f"Ø {_fmt_hold(float(metrics.get('avg_hold_sec', 0)))} Haltedauer"
+            f"{int(metrics.get('follower_count', 0))} Follower · "
+            f"Positionen {'öffentlich geteilt' if metrics.get('position_shared') else 'nicht geteilt'}"
         )
     else:
         st.warning(
-            "Für diese Wallet liegt kein Scanner-Verifikationsbefund vor. "
+            "Für diese Trader-UID liegt kein Scanner-Verifikationsbefund vor. "
             "Manuell hinzugefügte Trader gelten nicht als verifiziert."
         )
 
     st.caption(
-        "Externe Explorer dienen als unabhängige Gegenprüfung der öffentlichen "
-        "Wallet-Daten. Quantitative Verifikation garantiert keine zukünftigen Gewinne."
+        "Das Binance-Leaderboard-Profil dient als unabhängige Gegenprüfung der "
+        "öffentlichen Trader-Daten. Quantitative Verifikation garantiert keine "
+        "zukünftigen Gewinne."
+    )
+    st.caption(
+        "Das Binance-Leaderboard-Profil dient als unabhängige Gegenprüfung der "
+        "öffentlichen Trader-Daten. Quantitative Verifikation garantiert keine "
+        "zukünftigen Gewinne."
     )
     html = " · ".join(
         f'<a href="{url}" target="_blank" style="text-decoration:none">'
@@ -928,35 +916,28 @@ def _tab_verify(wallet: str) -> None:
 # ── 🔍 Scanner ───────────────────────────────────────────────────────────────
 
 def _render_scanner(adapter):
-    from src.adapters.hyperliquid_copytrader import LEADERBOARD_WINDOWS, hl_explorer_url
-
     st.markdown('<div class="section-header">🔍 Passenden Trader finden</div>',
                 unsafe_allow_html=True)
     st.caption(
-        "Es erscheinen nur quantitativ verifizierte Wallets. Das ist eine Prüfung "
-        "der öffentlichen Handelsdaten, keine Identitätsprüfung der Person. "
-        "Ranking-PnL folgt dem gewählten Fenster; alle Qualitäts-Gates nutzen 30 Tage."
+        "Es erscheinen nur quantitativ verifizierte Trader vom Binance-Leaderboard. "
+        "Das ist eine Prüfung der öffentlichen Handelsdaten, keine Identitätsprüfung "
+        "der Person. 'Intraday' heißt: gutes Ergebnis HEUTE (Tages-Leaderboard), "
+        "geprüft gegen 7-Tage- und 30-Tage-Konsistenz."
     )
     st.info(
-        "Verifikations-Gates: mindestens 30 geschlossene Trades, 5 aktive Tage, "
-        "45 % Win-Rate, Profit-Faktor 1,30, Long-Profit-Faktor 1,20, mindestens "
-        "10 Long-Trades mit positivem aggregiertem Long-PnL, maximal 15 % "
-        "Drawdown-Proxy, "
-        "positive 7T/30T-Performance und kopierbare Haltedauer."
+        "Verifikations-Gates: Mindest-Tages-ROI/-PnL, Positionen öffentlich "
+        "geteilt, positive 7T/30T-Performance, innerhalb 24h aktiv, "
+        "Mindest-Follower."
     )
 
     with st.form("scanner_form"):
         c1, c2, c3, c4 = st.columns(4)
-        window = c1.selectbox("Ranking-Zeitraum", LEADERBOARD_WINDOWS, index=2,
-                              format_func=lambda w: _WINDOW_LABEL.get(w, w))
-        min_win_rate = c2.slider("Min. Win-Rate %", 45, 80, 50) / 100
-        min_trades = c3.number_input("Min. Trades (30T)", min_value=30, value=50, step=10)
-        max_hold_min = c4.number_input("Max. Ø Hold (h)", min_value=1, value=24, step=1)
-
-        c5, c6 = st.columns(2)
-        min_account = c5.number_input("Min. Account-Wert ($)", min_value=0,
-                                      value=25000, step=5000)
-        limit = c6.slider("Top-Kandidaten verifizieren", 10, 60, 40, step=10)
+        min_day_roi = c1.number_input("Min. Tages-ROI (%)", min_value=0.0,
+                                      value=3.0, step=0.5)
+        min_day_pnl = c2.number_input("Min. Tages-PnL ($)", min_value=0.0,
+                                      value=50.0, step=10.0)
+        min_followers = c3.number_input("Min. Follower", min_value=0, value=0, step=10)
+        limit = c4.slider("Max. Ergebnisse", 5, 50, 20, step=5)
         submitted = st.form_submit_button("🔎 Verifizierte Trader suchen", type="primary",
                                           width="stretch")
 
@@ -965,18 +946,14 @@ def _render_scanner(adapter):
         note = st.empty()
 
         def _progress(done: int, total: int, wallet: str) -> None:
-            bar.progress(done / total)
+            bar.progress(done / max(total, 1))
             note.caption(f"Prüfe {done}/{total}: {_short(wallet)} …")
 
         try:
             results = adapter.list_leaderboard(
-                window=window, limit=limit,
-                min_trades=min_trades, min_win_rate=min_win_rate,
-                min_avg_hold_sec=120,
-                max_avg_hold_sec=max_hold_min * 3600 if max_hold_min else None,
-                min_account_value=min_account,
-                verified_only=False,
-                progress_cb=_progress,
+                limit=limit, min_day_roi_pct=min_day_roi,
+                min_day_pnl_usd=min_day_pnl, min_followers=min_followers,
+                verified_only=False, progress_cb=_progress,
             )
         except Exception as e:
             bar.empty()
@@ -991,7 +968,6 @@ def _render_scanner(adapter):
         st.session_state["scan_rejected"] = [
             result for result in results if not result["verified"]
         ]
-        st.session_state["scan_window"] = window
         st.session_state["scan_ts"] = _dt.datetime.now().strftime("%H:%M:%S")
 
     results = list(st.session_state.get("scan_results", []))
@@ -1026,68 +1002,48 @@ def _render_scanner(adapter):
 
     sort_by = st.selectbox(
         "Sortieren nach",
-        ["Quality-Score", "Long Profit-Faktor", "Profit-Faktor", "Niedrigster Drawdown",
-         "PnL (Fenster)", "Win-Rate", "Trades"],
+        ["Quality-Score", "Tages-ROI", "Tages-PnL", "Follower"],
         key="scan_sort",
     )
     sort_key = {
-        "Quality-Score": "quality_score",
-        "Long Profit-Faktor": "long_profit_factor",
-        "Profit-Faktor": "profit_factor",
-        "Niedrigster Drawdown": "max_drawdown_pct",
-        "PnL (Fenster)": "window_pnl", "Win-Rate": "win_rate",
-        "Trades": "trades",
+        "Quality-Score": "quality_score", "Tages-ROI": "day_roi",
+        "Tages-PnL": "day_pnl", "Follower": "follower_count",
     }[sort_by]
-    results.sort(key=lambda r: r.get(sort_key, 0),
-                 reverse=sort_by != "Niedrigster Drawdown")
+    results.sort(key=lambda r: r.get(sort_key, 0), reverse=True)
 
-    win_label = _WINDOW_LABEL.get(st.session_state.get("scan_window", "day"), "?")
     st.markdown(
-        f'<div class="badge-info">{len(results)} Treffer · Fenster: {win_label} · '
+        f'<div class="badge-info">{len(results)} Treffer · '
         f'gescannt {st.session_state.get("scan_ts", "")}</div>',
         unsafe_allow_html=True,
     )
+
+    from src.adapters.binance_leaderboard import binance_leaderboard_url
 
     chosen = {t["wallet"] for t in trader_store.list_traders() if t["is_copied"]}
     st.dataframe(
         pd.DataFrame([{
             "Status":        "🟢 kopiert" if r["wallet"] in chosen else "✅ verifiziert",
-            "Trader":        _short(r["wallet"]),
+            "Trader":        r["nick_name"] or _short(r["wallet"]),
             "Score":         r["quality_score"],
-            "Account":       r["account_value"],
-            "PnL Ranking":   r["window_pnl"],
-            "PnL 7T":        r["week_pnl"],
-            "PnL 30T":       r["month_pnl"],
-            "Trades 30T":    r["trades"],
-            "Aktive Tage":   r["active_days"],
-            "Win-Rate":      r["win_rate"],
-            "Profit-Faktor": r["profit_factor"],
-            "Long-Trades":   r["long_trades"],
-            "Long-PnL":      r["long_net_pnl"],
-            "Long-PF":       r["long_profit_factor"],
-            "Drawdown":      r["max_drawdown_pct"] / 100,
-            "Ø Hold":        r["avg_hold_sec"] / 60,
+            "Tages-ROI":     r["day_roi"] / 100,
+            "Tages-PnL":     r["day_pnl"],
+            "7T-ROI":        (r["week_roi"] or 0) / 100,
+            "30T-ROI":       (r["month_roi"] or 0) / 100,
+            "Follower":      r["follower_count"],
+            "Positionen geteilt": "ja" if r["position_shared"] else "nein",
             "Aktiv vor":     r["last_active_age"] / 3600,
-            "Explorer":      hl_explorer_url(r["wallet"]),
+            "Leaderboard":   binance_leaderboard_url(r["wallet"]),
         } for r in results]),
         width="stretch", hide_index=True,
         column_config={
             "Score":         st.column_config.ProgressColumn(
                 format="%.1f", min_value=0.0, max_value=100.0),
-            "Account":       st.column_config.NumberColumn(format="$%.0f"),
-            "PnL Ranking":   st.column_config.NumberColumn(format="$%+.0f"),
-            "PnL 7T":        st.column_config.NumberColumn(format="$%+.0f"),
-            "PnL 30T":       st.column_config.NumberColumn(format="$%+.0f"),
-            "Win-Rate":      st.column_config.ProgressColumn(
-                format="%.0f%%", min_value=0.0, max_value=1.0),
-            "Profit-Faktor": st.column_config.NumberColumn(format="%.2f"),
-            "Long-PnL":      st.column_config.NumberColumn(format="$%+.0f"),
-            "Long-PF":       st.column_config.NumberColumn(format="%.2f"),
-            "Drawdown":      st.column_config.ProgressColumn(
-                format="%.1f%%", min_value=0.0, max_value=0.15),
-            "Ø Hold":        st.column_config.NumberColumn(format="%.1f min"),
+            "Tages-ROI":     st.column_config.NumberColumn(format="%+.1f%%"),
+            "Tages-PnL":     st.column_config.NumberColumn(format="$%+.0f"),
+            "7T-ROI":        st.column_config.NumberColumn(format="%+.1f%%"),
+            "30T-ROI":       st.column_config.NumberColumn(format="%+.1f%%"),
             "Aktiv vor":     st.column_config.NumberColumn(format="%.1f h"),
-            "Explorer":      st.column_config.LinkColumn("🔗 Prüfen", display_text="Öffnen"),
+            "Leaderboard":   st.column_config.LinkColumn("🔗 Prüfen", display_text="Öffnen"),
         },
     )
 
@@ -1096,7 +1052,10 @@ def _render_scanner(adapter):
     with st.form("adopt_form"):
         a1, a2, a3 = st.columns([3, 1, 1])
         choice = a1.selectbox("Trader", options=[r["wallet"] for r in results],
-                              format_func=_short, label_visibility="collapsed")
+                              format_func=lambda w: next(
+                                  (r["nick_name"] or _short(w) for r in results if r["wallet"] == w),
+                                  _short(w),
+                              ), label_visibility="collapsed")
         amount = a2.number_input("Betrag $", min_value=1.0, value=_default_size(),
                                  step=5.0, label_visibility="collapsed")
         adopt = a3.form_submit_button("🚀 Kopieren", type="primary", width="stretch")
@@ -1115,6 +1074,7 @@ def _render_scanner(adapter):
         "Übernehmen setzt Betrag, aktiviert Copy-Trading und pinnt den Trader an. "
         "Alles davon lässt sich pro Trader nachträglich ändern."
     )
+
 
 
 # ── ⚙️ Setup ─────────────────────────────────────────────────────────────────
@@ -1153,14 +1113,13 @@ def _render_setup(adapter):
       <div class="detail-item"><div class="detail-label">Modus</div><div class="detail-value">{"DRY-RUN" if _dry_run() else "LIVE"}</div></div>
       <div class="detail-item"><div class="detail-label">Standard-Betrag</div><div class="detail-value">${_default_size():,.0f}</div></div>
       <div class="detail-item"><div class="detail-label">Polling-Intervall</div><div class="detail-value">{settings['poll_interval']:.0f}s</div></div>
-      <div class="detail-item"><div class="detail-label">Min. Signalgröße (HL)</div><div class="detail-value">${settings['min_copy_size_usd']:,.0f}</div></div>
+      <div class="detail-item"><div class="detail-label">Min. Signalgröße</div><div class="detail-value">${settings['min_copy_size_usd']:,.0f}</div></div>
       <div class="detail-item"><div class="detail-label">Auto-Discovery</div><div class="detail-value">{"AN" if settings['auto_discover'] else "AUS"}</div></div>
       <div class="detail-item"><div class="detail-label">Max. Trader</div><div class="detail-value">{settings['max_tracked_traders']}</div></div>
       <div class="detail-item"><div class="detail-label">Rescan-Intervall</div><div class="detail-value">{settings['rescan_hours']:.1f}h</div></div>
-      <div class="detail-item"><div class="detail-label">Min. Trades</div><div class="detail-value">{settings['min_trades']}</div></div>
-      <div class="detail-item"><div class="detail-label">Min. Win-Rate</div><div class="detail-value">{settings['min_win_rate']:.0%}</div></div>
-      <div class="detail-item"><div class="detail-label">Min. Account-Wert</div><div class="detail-value">${settings['min_account_value']:,.0f}</div></div>
-      <div class="detail-item"><div class="detail-label">Max. Ø Haltezeit</div><div class="detail-value">{settings['max_avg_hold_min']:.0f} min</div></div>
+      <div class="detail-item"><div class="detail-label">Min. Tages-ROI</div><div class="detail-value">{settings['min_day_roi_pct']:.1f}%</div></div>
+      <div class="detail-item"><div class="detail-label">Min. Tages-PnL</div><div class="detail-value">${settings['min_day_pnl_usd']:,.0f}</div></div>
+      <div class="detail-item"><div class="detail-label">Min. Follower</div><div class="detail-value">{settings['min_followers']}</div></div>
       <div class="detail-item"><div class="detail-label">Signal-TTL</div><div class="detail-value">{settings['signal_ttl']:.0f}s</div></div>
     </div>
     """, unsafe_allow_html=True)
