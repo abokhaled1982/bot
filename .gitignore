@@ -3,15 +3,18 @@ venv/
 .venv/
 env/
 .env
-.db-shm
-.db-*
-.db.bak
+
 
 # Database and Session files
 *.db
 *.session
 *.db-journal
-
+.db-shm
+.db-*
+.db.bak
+.db-wal
+binance_orderflow.db-shm
+binance_orderflow.db-wal
 # Python Cache
 __pycache__/
 *.pyc
