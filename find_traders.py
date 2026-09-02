@@ -25,6 +25,8 @@ def main() -> None:
                          help="Mindest-Tages-ROI in %%")
     parser.add_argument("--min-day-pnl", type=float, default=None,
                          help="Mindest-Tages-PnL in USD")
+    parser.add_argument("--min-win-rate", type=float, default=None,
+                         help="Mindest-Win-Rate in Prozent")
     args = parser.parse_args()
 
     kwargs = {"limit": args.limit, "verified_only": not args.all}
@@ -32,6 +34,8 @@ def main() -> None:
         kwargs["min_day_roi_pct"] = args.min_day_roi
     if args.min_day_pnl is not None:
         kwargs["min_day_pnl_usd"] = args.min_day_pnl
+    if args.min_win_rate is not None:
+        kwargs["min_win_rate_pct"] = args.min_win_rate
 
     print("\n🏆 Binance Futures-Leaderboard — Top Intraday-Trader")
     print("=" * 70)
@@ -44,15 +48,18 @@ def main() -> None:
         return
 
     print(f"\n{'Rang':<6} {'Score':<7} {'Tages-ROI':<11} {'Tages-PnL':<12} "
-          f"{'7T-ROI':<9} {'30T-ROI':<9} {'Follower':<9} {'Name'}")
-    print(f"{'-'*6} {'-'*7} {'-'*11} {'-'*12} {'-'*9} {'-'*9} {'-'*9} {'-'*20}")
+          f"{'Win-Rate':<10} {'7T-ROI':<9} {'30T-ROI':<9} {'Follower':<9} {'Name'}")
+    print(f"{'-'*6} {'-'*7} {'-'*11} {'-'*12} {'-'*10} {'-'*9} "
+          f"{'-'*9} {'-'*9} {'-'*20}")
 
     for i, c in enumerate(candidates, 1):
         m = c.metrics
         week = f"{m.week_roi:+.1f}%" if m.week_roi is not None else "—"
         month = f"{m.month_roi:+.1f}%" if m.month_roi is not None else "—"
+        win_rate = f"{m.win_rate:.1f}%" if m.win_rate is not None else "—"
         print(f"#{i:<5} {c.quality_score:<7.1f} {m.day_roi:>+9.1f}% "
-              f"${m.day_pnl:>+9,.0f} {week:<9} {month:<9} {m.follower_count:<9} "
+              f"${m.day_pnl:>+9,.0f} {win_rate:<10} {week:<9} {month:<9} "
+              f"{m.follower_count:<9} "
               f"{m.nick_name}")
 
     print("\n💡 Tipp: Profil pruefen:")

@@ -208,6 +208,7 @@ class TraderMetrics:
     week_pnl:        Optional[float] = None
     month_roi:       Optional[float] = None
     month_pnl:       Optional[float] = None
+    win_rate:        Optional[float] = None
     follower_count:  int = 0
     position_shared: bool = False
     nick_name:       str = ""
@@ -230,6 +231,7 @@ def evaluate_candidate(
     *,
     min_day_roi_pct: float = MIN_DAY_ROI_PCT,
     min_day_pnl_usd: float = MIN_DAY_PNL_USD,
+    min_win_rate_pct: Optional[float] = None,
     min_followers: int = MIN_FOLLOWERS,
     require_position_shared: bool = REQUIRE_POSITION_SHARED,
     require_positive_week: bool = REQUIRE_POSITIVE_WEEK,
@@ -242,6 +244,11 @@ def evaluate_candidate(
          f"Tages-ROI {metrics.day_roi:.1f}% < {min_day_roi_pct:.1f}%"),
         (metrics.day_pnl >= min_day_pnl_usd,
          f"Tages-PnL ${metrics.day_pnl:,.0f} < ${min_day_pnl_usd:,.0f}"),
+        (min_win_rate_pct is None
+         or (metrics.win_rate is not None and metrics.win_rate >= min_win_rate_pct),
+         f"Win-Rate {metrics.win_rate:.1f}% < {min_win_rate_pct:.1f}%"
+         if min_win_rate_pct is not None and metrics.win_rate is not None
+         else "Win-Rate nicht verfuegbar" if min_win_rate_pct is not None else ""),
         (metrics.follower_count >= min_followers,
          f"nur {metrics.follower_count} Follower < {min_followers}"),
         (metrics.position_shared or not require_position_shared,
@@ -289,9 +296,14 @@ def _extract_rank_row(row: dict) -> tuple[Optional[str], float, dict]:
         value = float(raw_value)
     except (TypeError, ValueError):
         value = 0.0
+    try:
+        win_rate = float(row["winRate"])
+    except (KeyError, TypeError, ValueError):
+        win_rate = None
     meta = {
         "nick_name": row.get("nickname") or row.get("nickName", ""),
         "follower_count": int(row.get("currentCopyCount", row.get("followerCount", 0)) or 0),
+        "win_rate": win_rate,
         # Binance liefert kein Sharing-Flag mehr auf Listen-Eintraegen — alles,
         # was hier zurueckkommt, ist Teil der oeffentlichen Liste und damit
         # per `getOtherPosition`-Aequivalent (lead-data/positions) einsehbar.
@@ -322,6 +334,8 @@ def merge_rank_rows(rank_data: dict[tuple[str, str], list[dict]]) -> dict[str, T
             if meta["nick_name"]:
                 m.nick_name = meta["nick_name"]
             m.follower_count = max(m.follower_count, meta["follower_count"])
+            if meta["win_rate"] is not None:
+                m.win_rate = meta["win_rate"]
             m.position_shared = m.position_shared or meta["position_shared"]
             if meta["update_time_ms"]:
                 age = max(0.0, now - meta["update_time_ms"] / 1000.0)
@@ -436,6 +450,7 @@ def find_intraday_traders(
     verified_only: bool = True,
     min_day_roi_pct: float = MIN_DAY_ROI_PCT,
     min_day_pnl_usd: float = MIN_DAY_PNL_USD,
+    min_win_rate_pct: Optional[float] = None,
     min_followers: int = MIN_FOLLOWERS,
     require_position_shared: bool = REQUIRE_POSITION_SHARED,
     require_positive_week: bool = REQUIRE_POSITIVE_WEEK,
@@ -458,7 +473,10 @@ def find_intraday_traders(
 
     all_metrics = merge_rank_rows(rank_data)
     # Nur wer heute unter den Top-Performern ist, gilt als "Intraday-Kandidat".
-    day_pool = {row.get("encryptedUid") or row.get("uid") for row in rank_data[("day", "ROI")]}
+    day_pool = {
+        row.get("leadPortfolioId") or row.get("encryptedUid") or row.get("uid")
+        for row in rank_data[("day", "ROI")]
+    }
     day_pool.discard(None)
 
     results: list[TraderCandidate] = []
@@ -470,6 +488,7 @@ def find_intraday_traders(
             metrics,
             min_day_roi_pct=min_day_roi_pct,
             min_day_pnl_usd=min_day_pnl_usd,
+            min_win_rate_pct=min_win_rate_pct,
             min_followers=min_followers,
             require_position_shared=require_position_shared,
             require_positive_week=require_positive_week,
