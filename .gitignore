@@ -3,6 +3,9 @@ venv/
 .venv/
 env/
 .env
+.db-shm
+.db-*
+.db.bak
 
 # Database and Session files
 *.db

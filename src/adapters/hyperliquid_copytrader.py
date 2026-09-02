@@ -28,6 +28,8 @@ import requests
 import websockets
 from loguru import logger
 
+from src.utils import trader_store
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 HL_API_URL = "https://api.hyperliquid.xyz/info"
@@ -91,15 +93,13 @@ def get_api_health() -> str:
     with _API_HEALTH_LOCK:
         return _api_health_state
 
-# Where manually activated (dashboard) traders are persisted across restarts
-ACTIVE_WALLETS_FILE = os.getenv("HL_ACTIVE_WALLETS_FILE", "hl_active_traders.json")
-
-# Where the currently focused (deep-dive) wallet is persisted across restarts
-FOCUS_WALLET_FILE = os.getenv("HL_FOCUS_WALLET_FILE", "hl_focus_wallet.json")
-
-# Per-wallet copy-size overrides (USD) — persisted across restarts. When absent,
-# the pipeline falls back to BINANCE_POSITION_SIZE_USDT.
-COPY_SIZES_FILE = os.getenv("HL_COPY_SIZES_FILE", "hl_copy_sizes.json")
+# Gewählte Trader, Beträge und Anpinnung liegen in der SQLite-DB
+# (src/utils/trader_store.py) — nur so sieht der laufende Bot-Prozess eine
+# Änderung, die im separaten Dashboard-Prozess gemacht wurde.
+# Wie oft der Bot diesen Store neu einliest:
+STORE_SYNC_INTERVAL = float(os.getenv("HL_STORE_SYNC_SEC", "3"))
+# Wie oft der Bot seine Tracking-Telemetrie zurück in die DB schreibt:
+STATE_PUBLISH_INTERVAL = float(os.getenv("HL_STATE_PUBLISH_SEC", "3"))
 
 _UNSUPPORTED_COINS = {"PURR", "HFUN", "JEFF"}
 
@@ -213,7 +213,12 @@ class HyperliquidCopyTrader:
         # → signal.symbol = "BTCUSDT" → execute on Binance
     """
 
-    def __init__(self) -> None:
+    def __init__(self, publish_state: bool = False) -> None:
+        # publish_state=True nur im Bot-Prozess: dann schreibt dieser Adapter
+        # seine Tracking-Telemetrie in die DB, aus der das Dashboard liest.
+        self._publish_state = publish_state
+        trader_store.init_db()
+
         self._positions: dict[str, dict[str, dict]] = defaultdict(dict)
         self._trader_stats: dict[str, TraderStats] = {}
         self.signal_queue: asyncio.Queue[CopySignal] = asyncio.Queue(maxsize=500)
@@ -226,18 +231,22 @@ class HyperliquidCopyTrader:
         self._poll_count = 0
         self._wallets_lock = threading.Lock()
         # Wallets manually activated via the dashboard, persisted across restarts
-        self._manual_active: set[str] = self._load_active_wallets()
+        self._manual_active: set[str] = set()
         # Wallets tracked purely for observation (Focus tab). WS+poll, but no copy-signals.
         self._observed_only: set[str] = set()
         # Currently focused wallet — persisted across restarts and page reloads
-        self._focus_wallet: Optional[str] = self._load_focus_wallet()
+        self._focus_wallet: Optional[str] = None
         # Per-wallet copy-size override in USD ({} means use global default)
-        self._copy_sizes: dict[str, float] = self._load_copy_sizes()
+        self._copy_sizes: dict[str, float] = {}
         # Dynamic trader list (env manual + dashboard-activated + focus + auto-discovered)
-        self._wallets: list[str] = list(dict.fromkeys(MANUAL_WALLETS + list(self._manual_active)))
-        if self._focus_wallet and self._focus_wallet not in self._wallets:
-            self._wallets.append(self._focus_wallet)
-            self._observed_only.add(self._focus_wallet)
+        self._wallets: list[str] = list(MANUAL_WALLETS)
+        # Wallets aus der Auto-Discovery — nur Beobachtung, nie Copy-Quelle
+        self._auto_wallets: list[str] = []
+        # Per-Wallet-Nachweis, dass Tracking wirklich läuft (Dashboard-Spalte
+        # "Tracking" und Konsolen-Diagnose speisen sich hieraus).
+        self._telemetry: dict[str, dict] = {}
+        self._seed_env_wallets()
+        self._sync_from_store(initial=True)
         self._last_scan = 0.0
         # Runtime-adjustable settings (dashboard "Einstellungen" tab), default from env
         self._poll_interval = POLL_INTERVAL
@@ -294,156 +303,259 @@ class HyperliquidCopyTrader:
     def set_min_copy_size(self, usd: float) -> None:
         self._min_copy_size_usd = max(0.0, float(usd))
 
+    # ── Trader-Auswahl (DB-gestützt, prozessübergreifend) ────────────────────
+    #
+    # Alle Schreibzugriffe gehen in die SQLite-Tabelle `copy_traders`. Der
+    # Bot-Prozess liest sie alle STORE_SYNC_INTERVAL Sekunden neu ein, deshalb
+    # wirkt eine Änderung im Dashboard ohne Neustart.
+
+    @staticmethod
+    def _seed_env_wallets() -> None:
+        """HL_TRADER_WALLETS aus der .env als kopierte Trader in die DB spiegeln."""
+        for wallet in MANUAL_WALLETS:
+            trader_store.upsert_trader(wallet, is_copied=True, source="env")
+
+    def _rebuild_wallet_list(self) -> None:
+        """`_wallets` neu aufbauen: gewählte Trader zuerst, dann Auto-Discovery.
+
+        Muss unter `_wallets_lock` laufen. `_observed_only` enthält danach genau
+        die Wallets, die zwar getrackt, aber NICHT kopiert werden — daran hängt
+        sowohl die Signal-Freigabe als auch das Konsolen-Logging.
+        """
+        chosen = list(dict.fromkeys(list(MANUAL_WALLETS) + sorted(self._manual_active)))
+        if self._focus_wallet and self._focus_wallet not in chosen:
+            chosen.append(self._focus_wallet)
+        auto = [w for w in self._auto_wallets if w not in chosen]
+        self._wallets = chosen + auto
+        observed = set(auto)
+        if (self._focus_wallet
+                and self._focus_wallet not in self._manual_active
+                and self._focus_wallet not in MANUAL_WALLETS):
+            observed.add(self._focus_wallet)
+        self._observed_only = observed
+
+    def _sync_from_store(self, initial: bool = False) -> None:
+        """Trader-Auswahl aus der DB übernehmen und Änderungen protokollieren.
+
+        Das ist die einzige Stelle, an der `_manual_active`, `_focus_wallet`
+        und `_copy_sizes` im laufenden Betrieb gesetzt werden.
+        """
+        rows = trader_store.list_traders()
+        copied = {r["wallet"] for r in rows if r["is_copied"]}
+        focus = next((r["wallet"] for r in rows if r["is_focus"]), None)
+        sizes = {
+            r["wallet"]: float(r["size_usdt"])
+            for r in rows if r["size_usdt"] and float(r["size_usdt"]) > 0
+        }
+
+        with self._wallets_lock:
+            added = copied - self._manual_active
+            removed = self._manual_active - copied
+            resized = {
+                w: s for w, s in sizes.items()
+                if not initial and self._copy_sizes.get(w) != s and w not in added
+            }
+            focus_changed = (not initial) and focus != self._focus_wallet
+            self._manual_active = copied
+            self._focus_wallet = focus
+            self._copy_sizes = sizes
+            self._rebuild_wallet_list()
+            stale = [w for w in list(self._positions) if w not in self._wallets]
+
+        for wallet in stale:
+            self._positions.pop(wallet, None)
+            self._telemetry.pop(wallet, None)
+
+        if initial:
+            return
+        # Nur der Bot-Prozess protokolliert Auswahl-Ereignisse. Das Dashboard
+        # ruft dieselbe Methode auf und würde sonst jede Zeile verdoppeln.
+        if not self._publish_state:
+            return
+
+        # Konsole: nur Auswahl-Ereignisse, kein Rauschen von beobachteten Wallets.
+        for wallet in sorted(added):
+            size = sizes.get(wallet)
+            amount = f"${size:,.0f}" if size else "Standardbetrag"
+            logger.success(
+                f"[HL-COPY] ➕ Trader übernommen: {self._short(wallet)} | "
+                f"{amount}/Trade | Tracking + Binance-Pipeline aktiv"
+            )
+            trader_store.log_event(
+                "TRADER_ADDED", f"Copy aktiviert mit {amount}/Trade",
+                wallet=wallet, level="success",
+            )
+        for wallet in sorted(removed):
+            logger.info(
+                f"[HL-COPY] ➖ Trader entfernt: {self._short(wallet)} | "
+                f"kein Copy-Trading mehr"
+            )
+            trader_store.log_event(
+                "TRADER_REMOVED", "Copy deaktiviert", wallet=wallet,
+            )
+        for wallet, size in sorted(resized.items()):
+            logger.info(
+                f"[HL-COPY] ✏️  Betrag geändert: {self._short(wallet)} → ${size:,.0f}/Trade"
+            )
+            trader_store.log_event(
+                "TRADER_UPDATED", f"Einsatz auf ${size:,.0f}/Trade gesetzt",
+                wallet=wallet,
+            )
+        if focus_changed:
+            logger.info(
+                f"[HL-COPY] 📌 Angepinnt: {self._short(focus) if focus else 'keiner'}"
+            )
+
+    async def _sync_loop(self) -> None:
+        while True:
+            await asyncio.sleep(STORE_SYNC_INTERVAL)
+            try:
+                await asyncio.to_thread(self._sync_from_store)
+            except Exception as e:
+                logger.error(f"[HL-COPY] Store-Sync fehlgeschlagen: {e}")
+
+    def refresh(self) -> None:
+        """Trader-Auswahl aus der DB neu einlesen.
+
+        Für Prozesse ohne laufenden `_sync_loop` — vor allem das Dashboard,
+        das den Adapter nur zum Schreiben und für den Scanner benutzt.
+        """
+        self._sync_from_store()
+
+    @staticmethod
+    def _short(wallet: str) -> str:
+        return f"{wallet[:6]}...{wallet[-4:]}" if len(wallet) > 12 else wallet
+
     def activate_wallet(self, wallet: str) -> bool:
-        """Manually activate a trader for immediate copy-trading. Returns True if newly added."""
+        """Trader für Copy-Trading aktivieren. True, wenn er neu dazukam."""
         wallet = wallet.strip()
         if not wallet:
             return False
-        with self._wallets_lock:
-            self._manual_active.add(wallet)
-            # Copy-active overrides observation-only bookkeeping
-            self._observed_only.discard(wallet)
-            is_new = wallet not in self._wallets
-            if is_new:
-                self._wallets.append(wallet)
-        self._save_active_wallets()
+        is_new = wallet not in self._manual_active
+        trader_store.upsert_trader(wallet, is_copied=True, source="dashboard")
+        self._sync_from_store()
         if is_new:
             stats = self._api_trader_stats(wallet)
             if stats:
                 self._trader_stats[wallet] = stats
+                trader_store.update_trader_stats(
+                    wallet, account_usd=stats.total_pnl, trades=stats.total_trades,
+                )
         return is_new
 
     def deactivate_wallet(self, wallet: str) -> None:
-        """Remove a manually activated trader from tracking.
+        """Copy-Trading für einen Trader ausschalten; Anpinnung bleibt bestehen."""
+        trader_store.upsert_trader(wallet, is_copied=False)
+        self._sync_from_store()
 
-        A wallet that is also the current Focus stays tracked as observation-only
-        (no copy signals), so the Focus tab keeps working after copy is disabled.
-        """
-        with self._wallets_lock:
-            self._manual_active.discard(wallet)
-            if wallet == self._focus_wallet:
-                self._observed_only.add(wallet)
-                return
-            if wallet in self._wallets and wallet not in MANUAL_WALLETS:
-                self._wallets.remove(wallet)
+    def remove_trader(self, wallet: str) -> None:
+        """Trader vollständig aus Auswahl, Betrag, Anpinnung und Tracking löschen."""
+        wallet = wallet.strip()
+        trader_store.remove_trader(wallet)
+        self._sync_from_store()
         self._positions.pop(wallet, None)
         self._trader_stats.pop(wallet, None)
-        self._save_active_wallets()
-
-    @staticmethod
-    def _load_active_wallets() -> set[str]:
-        try:
-            with open(ACTIVE_WALLETS_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-                return set(data) if isinstance(data, list) else set()
-        except (OSError, json.JSONDecodeError):
-            return set()
-
-    @staticmethod
-    def _load_focus_wallet() -> Optional[str]:
-        try:
-            with open(FOCUS_WALLET_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-                wallet = data.get("wallet") if isinstance(data, dict) else None
-                if isinstance(wallet, str) and wallet.strip():
-                    return wallet.strip()
-                return None
-        except (OSError, json.JSONDecodeError):
-            return None
-
-    def _save_focus_wallet(self) -> None:
-        try:
-            with open(FOCUS_WALLET_FILE, "w", encoding="utf-8") as f:
-                json.dump({"wallet": self._focus_wallet or ""}, f, indent=2)
-        except OSError as e:
-            logger.error(f"[HL-COPY] Failed to save focus wallet: {e}")
+        self._telemetry.pop(wallet, None)
 
     def get_focus_wallet(self) -> Optional[str]:
         return self._focus_wallet
 
     def set_focus_wallet(self, wallet: str) -> None:
-        """Persist a wallet as the Focus target — tracked live (WS + poll) but NOT copy-signaled.
-
-        Setting a new focus removes the previous one from tracking if it was
-        observation-only (i.e. not also manually copy-activated or env-pinned).
-        """
-        wallet = wallet.strip()
-        if not wallet:
+        """Trader anpinnen — wird live getrackt (WS + Poll), löst aber allein
+        noch kein Copy-Trading aus."""
+        if not wallet.strip():
             return
-        prev = self._focus_wallet
-        with self._wallets_lock:
-            if prev and prev != wallet and prev in self._observed_only:
-                self._observed_only.discard(prev)
-                if prev in self._wallets and prev not in MANUAL_WALLETS and prev not in self._manual_active:
-                    self._wallets.remove(prev)
-                    self._positions.pop(prev, None)
-            self._focus_wallet = wallet
-            if wallet not in self._wallets:
-                self._wallets.append(wallet)
-            if wallet not in MANUAL_WALLETS and wallet not in self._manual_active:
-                self._observed_only.add(wallet)
-        self._save_focus_wallet()
+        trader_store.set_focus(wallet.strip())
+        self._sync_from_store()
 
     def clear_focus_wallet(self) -> None:
-        prev = self._focus_wallet
-        with self._wallets_lock:
-            self._focus_wallet = None
-            if prev and prev in self._observed_only:
-                self._observed_only.discard(prev)
-                if prev in self._wallets and prev not in MANUAL_WALLETS and prev not in self._manual_active:
-                    self._wallets.remove(prev)
-                    self._positions.pop(prev, None)
-        self._save_focus_wallet()
+        trader_store.set_focus(None)
+        self._sync_from_store()
 
     def _should_emit_signals_for(self, wallet: str) -> bool:
-        """Only explicitly chosen traders are copied.
+        """Nur bewusst gewählte Trader werden kopiert.
 
-        Auto-discovered wallets are watch-only until the user activates them in
-        the dashboard — otherwise every leaderboard hit would place real orders.
+        Auto-entdeckte Wallets sind reine Beobachtung, bis der Nutzer sie im
+        Dashboard aktiviert — sonst würde jeder Leaderboard-Treffer echte
+        Orders auslösen.
         """
         if wallet in self._observed_only:
             return False
         return wallet in MANUAL_WALLETS or wallet in self._manual_active
 
-    @staticmethod
-    def _load_copy_sizes() -> dict[str, float]:
-        try:
-            with open(COPY_SIZES_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return {str(k): float(v) for k, v in data.items() if float(v) > 0}
-                return {}
-        except (OSError, json.JSONDecodeError, ValueError):
-            return {}
-
-    def _save_copy_sizes(self) -> None:
-        try:
-            with open(COPY_SIZES_FILE, "w", encoding="utf-8") as f:
-                json.dump(self._copy_sizes, f, indent=2, sort_keys=True)
-        except OSError as e:
-            logger.error(f"[HL-COPY] Failed to save copy sizes: {e}")
+    def is_copied(self, wallet: str) -> bool:
+        """Öffentliche Prüfung für die Pipeline, bevor eine Order ausgelöst wird."""
+        return self._should_emit_signals_for(wallet)
 
     def get_copy_size(self, wallet: str) -> Optional[float]:
-        """Per-wallet position size in USD, or None to fall back to the pipeline default."""
+        """Einsatz pro Trade in USD für diesen Trader, sonst None (= Default)."""
         return self._copy_sizes.get(wallet.strip())
 
     def set_copy_size(self, wallet: str, size_usd: float) -> None:
         wallet = wallet.strip()
         if not wallet or size_usd <= 0:
             return
-        self._copy_sizes[wallet] = float(size_usd)
-        self._save_copy_sizes()
+        trader_store.upsert_trader(wallet, size_usdt=float(size_usd))
+        self._sync_from_store()
 
     def clear_copy_size(self, wallet: str) -> None:
-        self._copy_sizes.pop(wallet.strip(), None)
-        self._save_copy_sizes()
+        trader_store.upsert_trader(wallet.strip(), size_usdt=0)
+        self._sync_from_store()
 
-    def _save_active_wallets(self) -> None:
-        try:
-            with open(ACTIVE_WALLETS_FILE, "w", encoding="utf-8") as f:
-                json.dump(sorted(self._manual_active), f, indent=2)
-        except OSError as e:
-            logger.error(f"[HL-COPY] Failed to save active wallets: {e}")
+    # ── Tracking-Nachweis ────────────────────────────────────────────────────
+
+    def _tel(self, wallet: str) -> dict:
+        """Telemetrie-Datensatz eines Wallets (legt ihn bei Bedarf an)."""
+        return self._telemetry.setdefault(wallet, {
+            "ws_subscribed": False, "ws_sub_at": 0.0,
+            "last_fill_at": 0.0, "fill_count": 0,
+            "last_poll_at": 0.0, "poll_count": 0, "poll_error": "",
+            "signal_count": 0, "last_signal_at": 0.0,
+        })
+
+    def get_tracking(self) -> dict[str, dict]:
+        """Pro Wallet: WS-Subscription, letzter Fill, Poll- und Signal-Zähler.
+
+        Der Bot veröffentlicht dasselbe zyklisch in `tracker_state`, damit das
+        Dashboard (eigener Prozess!) den echten Tracking-Zustand sieht.
+        """
+        out: dict[str, dict] = {}
+        for wallet in list(self._wallets):
+            tel = dict(self._tel(wallet))
+            tel["wallet"] = wallet
+            tel["is_copied"] = self._should_emit_signals_for(wallet)
+            tel["open_positions"] = len(self._positions.get(wallet, {}))
+            out[wallet] = tel
+        return out
+
+    def _publish_tracker_state(self) -> None:
+        """Telemetrie der gewählten Trader in die DB schreiben."""
+        rows = []
+        for wallet in list(self._wallets):
+            if wallet not in self._manual_active and wallet != self._focus_wallet \
+                    and wallet not in MANUAL_WALLETS:
+                continue  # Auto-Discovery-Kandidaten interessieren das UI nicht
+            tel = dict(self._tel(wallet))
+            positions = dict(self._positions.get(wallet, {}))
+            stats = self._trader_stats.get(wallet)
+            tel.update({
+                "wallet": wallet,
+                "is_copied": self._should_emit_signals_for(wallet),
+                "open_positions": len(positions),
+                "positions": positions,
+                "account_usd": stats.total_pnl if stats else 0.0,
+            })
+            rows.append(tel)
+        trader_store.publish_tracker_state(rows)
+
+    async def _publish_loop(self) -> None:
+        while True:
+            await asyncio.sleep(STATE_PUBLISH_INTERVAL)
+            try:
+                await asyncio.to_thread(self._publish_tracker_state)
+            except Exception as e:
+                logger.debug(f"[HL-COPY] Tracker-State publish: {e}")
+
 
     def list_leaderboard(
         self, window: str = "day", limit: int = 30,
@@ -571,11 +683,15 @@ class HyperliquidCopyTrader:
 
     def status(self) -> dict:
         total_positions = sum(len(p) for p in self._positions.values())
+        copied = [w for w in self._wallets if self._should_emit_signals_for(w)]
+        ws_ok = sum(1 for w in copied if self._tel(w)["ws_subscribed"])
         return {
             "connected":       self._connected,
             "ws_connected":    self._ws_connected,
             "discovering":     self._discovering,
             "tracked_traders": len(self._wallets),
+            "copied_traders":  len(copied),
+            "ws_subscribed":   ws_ok,
             "total_positions": total_positions,
             "fresh_signals":   len([s for s in self._signals if s.is_fresh]),
             "poll_count":      self._poll_count,
@@ -591,43 +707,50 @@ class HyperliquidCopyTrader:
     async def start(self) -> None:
         # Auto-discover traders if no manual wallets and auto-discover is on
         if AUTO_DISCOVER:
-            logger.info("[HL-COPY] 🔍 Auto-discovery enabled — scanning for top scalpers...")
+            logger.debug("[HL-COPY] Auto-Discovery aktiv — scanne Leaderboard …")
             self._discovering = True
             try:
                 discovered = await asyncio.to_thread(self._discover_scalpers)
             finally:
                 self._discovering = False
-            for w in discovered:
-                if w not in self._wallets:
-                    self._wallets.append(w)
+            with self._wallets_lock:
+                self._auto_wallets = list(discovered)
+                self._rebuild_wallet_list()
             self._last_scan = time.time()
 
-        if not self._wallets:
-            logger.warning(
-                "[HL-COPY] No traders found! Set HL_TRADER_WALLETS in .env "
-                "or ensure HL_AUTO_DISCOVER=True and API is reachable."
+        # Ohne Trader läuft trotzdem der Sync-Loop weiter: sobald im Dashboard
+        # einer übernommen wird, startet Tracking + Pipeline ohne Neustart.
+        copied = [w for w in self._wallets if self._should_emit_signals_for(w)]
+        if copied:
+            logger.info(f"[HL-COPY] Kopiere {len(copied)} Trader:")
+            for i, w in enumerate(copied, 1):
+                size = self._copy_sizes.get(w)
+                amount = f"${size:,.0f}" if size else "Standardbetrag"
+                logger.info(f"[HL-COPY]   #{i}: {self._short(w)} | {amount}/Trade")
+        else:
+            logger.info(
+                "[HL-COPY] Kein Trader ausgewählt — es wird nichts kopiert. "
+                "Im Dashboard unter 🔍 Scanner einen Trader übernehmen."
             )
-            return
-
-        logger.info(f"[HL-COPY] Tracking {len(self._wallets)} trader(s):")
-        for i, w in enumerate(self._wallets, 1):
-            short = f"{w[:6]}...{w[-4:]}" if len(w) > 12 else w
-            stats = self._trader_stats.get(w)
-            tag = ""
-            if stats:
-                tag = f" | ${stats.total_pnl:+,.0f} | {stats.total_trades} fills"
-            manual = " (manual)" if w in MANUAL_WALLETS else " (auto)"
-            logger.info(f"[HL-COPY]   #{i}: {short}{tag}{manual}")
+        if self._auto_wallets:
+            logger.debug(
+                f"[HL-COPY] {len(self._auto_wallets)} auto-entdeckte Wallet(s) "
+                f"nur zur Beobachtung getrackt"
+            )
 
         await self._fetch_all_trader_stats()
         await self._poll_all_positions(emit_signals=False)
         self._connected = True
 
-        await asyncio.gather(
+        loops = [
             self._poll_loop(),
             self._ws_loop(),
             self._rescan_loop(),
-        )
+            self._sync_loop(),
+        ]
+        if self._publish_state:
+            loops.append(self._publish_loop())
+        await asyncio.gather(*loops)
 
     # ── REST Polling ──────────────────────────────────────────────────────────
 
@@ -644,15 +767,20 @@ class HyperliquidCopyTrader:
             try:
                 await self._poll_trader(wallet, emit_signals)
             except Exception as e:
-                short = f"{wallet[:6]}...{wallet[-4:]}"
-                logger.error(f"[HL-COPY] Error polling {short}: {e}")
+                self._tel(wallet)["poll_error"] = str(e)
+                logger.error(f"[HL-COPY] Error polling {self._short(wallet)}: {e}")
         self._last_poll = time.time()
         self._poll_count += 1
 
     async def _poll_trader(self, wallet: str, emit_signals: bool) -> None:
         data = await asyncio.to_thread(self._api_clearinghouse_state, wallet)
+        tel = self._tel(wallet)
         if data is None:
+            tel["poll_error"] = "clearinghouseState nicht erreichbar"
             return
+        tel["poll_error"] = ""
+        tel["last_poll_at"] = time.time()
+        tel["poll_count"] += 1
 
         new_positions: dict[str, dict] = {}
         for ap in data.get("assetPositions", []):
@@ -786,6 +914,9 @@ class HyperliquidCopyTrader:
         self._signals.append(sig)
         if len(self._signals) > self._max_signals:
             self._signals = self._signals[-self._max_signals:]
+        tel = self._tel(sig.trader)
+        tel["signal_count"] += 1
+        tel["last_signal_at"] = sig.timestamp
         try:
             self.signal_queue.put_nowait(sig)
         except asyncio.QueueFull:
@@ -824,20 +955,45 @@ class HyperliquidCopyTrader:
                         resub_task.cancel()
             except Exception as e:
                 self._ws_connected = False
+                for tel in self._telemetry.values():
+                    tel["ws_subscribed"] = False
                 logger.warning(f"[HL-COPY] WS reconnect in {delay}s: {e}")
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60)
 
     async def _ws_sync_subscriptions(self, ws, subscribed: set[str]) -> None:
-        """Subscribe any newly-tracked wallet not yet subscribed on this connection."""
-        for wallet in list(self._wallets):
-            if wallet in subscribed:
-                continue
+        """Subscriptions an die aktuelle Trader-Liste angleichen.
+
+        Neu übernommene Trader werden hier abonniert (ohne Reconnect), entfernte
+        wieder abgemeldet — sonst liefe das Tracking für gelöschte Trader weiter.
+        """
+        wanted = set(self._wallets)
+
+        for wallet in wanted - subscribed:
             await ws.send(json.dumps({
                 "method": "subscribe",
                 "subscription": {"type": "userFills", "user": wallet},
             }))
             subscribed.add(wallet)
+            tel = self._tel(wallet)
+            tel["ws_subscribed"] = True
+            tel["ws_sub_at"] = time.time()
+            if self._should_emit_signals_for(wallet):
+                logger.info(
+                    f"[HL-COPY] 📡 WebSocket abonniert: {self._short(wallet)} — "
+                    f"Fills werden ab jetzt live verfolgt"
+                )
+
+        for wallet in subscribed - wanted:
+            try:
+                await ws.send(json.dumps({
+                    "method": "unsubscribe",
+                    "subscription": {"type": "userFills", "user": wallet},
+                }))
+            except Exception as e:
+                logger.debug(f"[HL-COPY] Unsubscribe {self._short(wallet)}: {e}")
+            subscribed.discard(wallet)
+            self._tel(wallet)["ws_subscribed"] = False
 
     async def _handle_ws_message(self, msg: dict) -> None:
         channel = msg.get("channel", "")
@@ -852,6 +1008,7 @@ class HyperliquidCopyTrader:
             # discovery candidates and stay on DEBUG.
             emit = logger.info if is_copied else logger.debug
             tag = "COPY" if is_copied else "WATCH"
+            tel = self._tel(user)
             for f in data.get("fills", []) or []:
                 try:
                     coin = f.get("coin", "?")
@@ -861,6 +1018,8 @@ class HyperliquidCopyTrader:
                     direction = f.get("dir", "")
                     closed_pnl = float(f.get("closedPnl", "0") or "0")
                     arrow = "🟢 BUY " if side == "B" else "🔴 SELL"
+                    tel["fill_count"] += 1
+                    tel["last_fill_at"] = float(f.get("time", 0) or 0) / 1000.0 or time.time()
                     emit(
                         f"[HL-{tag}] {arrow} {short} | {coin} | "
                         f"{sz:.4f} @ ${px:.4f} = ${sz * px:,.0f} | "
@@ -881,11 +1040,15 @@ class HyperliquidCopyTrader:
                 )
                 if stats:
                     self._trader_stats[wallet] = stats
-                    short = f"{wallet[:6]}...{wallet[-4:]}"
-                    emit = (logger.info if self._should_emit_signals_for(wallet)
-                            else logger.debug)
+                    is_copied = self._should_emit_signals_for(wallet)
+                    if is_copied or wallet == self._focus_wallet:
+                        await asyncio.to_thread(
+                            trader_store.update_trader_stats, wallet,
+                            account_usd=stats.total_pnl, trades=stats.total_trades,
+                        )
+                    emit = logger.info if is_copied else logger.debug
                     emit(
-                        f"[HL-COPY] 📊 {short} | "
+                        f"[HL-COPY] 📊 {self._short(wallet)} | "
                         f"Account: ${stats.total_pnl:,.0f} | "
                         f"Fills: {stats.total_trades}"
                     )
@@ -900,33 +1063,27 @@ class HyperliquidCopyTrader:
         while True:
             await asyncio.sleep(RESCAN_INTERVAL_SEC)
             try:
-                logger.info("[HL-COPY] 🔄 Rescanning leaderboard for top scalpers...")
+                logger.debug("[HL-COPY] Rescanning leaderboard for top scalpers...")
                 self._discovering = True
                 try:
                     discovered = await asyncio.to_thread(self._discover_scalpers)
                 finally:
                     self._discovering = False
-                pinned = set(MANUAL_WALLETS) | self._manual_active
-                auto_wallets = [w for w in discovered if w not in pinned]
-                new_wallets = list(dict.fromkeys(
-                    list(MANUAL_WALLETS) + list(self._manual_active) + auto_wallets[:MAX_TRACKED_TRADERS]
-                ))
-                added = [w for w in new_wallets if w not in self._wallets]
-                removed = [w for w in self._wallets if w not in new_wallets and w not in pinned]
                 with self._wallets_lock:
-                    self._wallets = new_wallets
+                    before = set(self._wallets)
+                    self._auto_wallets = list(discovered)[:MAX_TRACKED_TRADERS]
+                    self._rebuild_wallet_list()
+                    removed = before - set(self._wallets)
                 self._last_scan = time.time()
                 for w in removed:
                     self._positions.pop(w, None)
                     self._trader_stats.pop(w, None)
-                if added or removed:
-                    await self._fetch_all_trader_stats()
-                    logger.info(
-                        f"[HL-COPY] Rescan complete — +{len(added)}/-{len(removed)} "
-                        f"trader(s), {len(self._wallets)} tracked total"
-                    )
-                else:
-                    logger.info("[HL-COPY] Rescan complete — trader list unchanged")
+                    self._telemetry.pop(w, None)
+                # Auto-Discovery ist reine Beobachtung — kein Konsolen-Rauschen.
+                logger.debug(
+                    f"[HL-COPY] Rescan fertig — {len(self._auto_wallets)} "
+                    f"Beobachtungs-Wallet(s), {len(self._wallets)} getrackt gesamt"
+                )
             except Exception as e:
                 logger.error(f"[HL-COPY] Rescan error: {e}")
 
@@ -952,7 +1109,7 @@ class HyperliquidCopyTrader:
         # Prefer wallets with the highest daily volume (proxy for trade frequency)
         candidates.sort(key=lambda c: c[1], reverse=True)
         candidates = candidates[:DISCOVERY_CANDIDATE_POOL]
-        logger.info(f"[HL-COPY] Evaluating {len(candidates)} leaderboard candidate(s)...")
+        logger.debug(f"[HL-COPY] Evaluating {len(candidates)} leaderboard candidate(s)...")
 
         scored: list[tuple[str, TraderMetrics]] = []
         # Restrict metrics to a recent window so auto-discovery ranks by *current*
@@ -977,8 +1134,8 @@ class HyperliquidCopyTrader:
         selected = scored[:MAX_TRACKED_TRADERS]
         for wallet, metrics in selected:
             short = f"{wallet[:6]}...{wallet[-4:]}"
-            logger.info(
-                f"[HL-COPY] ✅ Selected {short} | trades={metrics.trades} | "
+            logger.debug(
+                f"[HL-COPY] Kandidat {short} | trades={metrics.trades} | "
                 f"win_rate={metrics.win_rate:.0%} | "
                 f"avg_hold={metrics.avg_hold_sec / 60:.1f}min"
             )
@@ -1148,26 +1305,45 @@ class HyperliquidCopyTrader:
     # ── Cleanup ───────────────────────────────────────────────────────────────
 
     async def cleanup_loop(self) -> None:
+        """Regelmäßiger Tracking-Nachweis für die gewählten Trader.
+
+        Loggt bewusst nur Trader, die wir kopieren — pro Trader wird sichtbar,
+        ob der WebSocket abonniert ist, wann der letzte Fill kam und welche
+        Positionen der Trader gerade auf Hyperliquid hält.
+        """
         while True:
             await asyncio.sleep(60)
+            copied = [w for w in list(self._wallets) if self._should_emit_signals_for(w)]
+            if not copied:
+                logger.debug("[HL] Kein Trader ausgewählt — nichts zu tracken")
+                continue
+
             st = self.status()
-            logger.debug(
-                f"[HL] Status | WS:{st['ws_connected']} | "
-                f"Traders:{st['tracked_traders']} | "
-                f"Pos:{st['total_positions']} | "
-                f"Signals:{st['fresh_signals']}"
+            logger.info(
+                f"[HL] Tracking | WS:{'auf' if st['ws_connected'] else 'ab'} | "
+                f"{st['ws_subscribed']}/{len(copied)} Trader abonniert | "
+                f"Polls:{st['poll_count']} | frische Signale:{st['fresh_signals']}"
             )
-            for wallet in list(self._wallets):
+            now = time.time()
+            for wallet in copied:
+                tel = self._tel(wallet)
                 positions = self._positions.get(wallet, {})
-                if not positions:
-                    continue
-                short = f"{wallet[:6]}...{wallet[-4:]}"
                 coins = ", ".join(
-                    f"{c} {'L' if p['size']>0 else 'S'} ${p['value_usd']:,.0f}"
+                    f"{c} {'L' if p['size'] > 0 else 'S'} ${p['value_usd']:,.0f}"
                     for c, p in positions.items()
+                ) or "keine Position"
+                fill_age = (f"{(now - tel['last_fill_at']) / 60:.0f}min"
+                            if tel["last_fill_at"] else "noch keiner")
+                poll_age = (f"{now - tel['last_poll_at']:.0f}s"
+                            if tel["last_poll_at"] else "nie")
+                logger.info(
+                    f"[HL-COPY]   {self._short(wallet)} | "
+                    f"WS:{'✓' if tel['ws_subscribed'] else '✗'} | "
+                    f"Fills:{tel['fill_count']} (letzter {fill_age}) | "
+                    f"Poll vor {poll_age} | Signale:{tel['signal_count']} | {coins}"
                 )
-                if self._should_emit_signals_for(wallet):
-                    logger.info(f"[HL-COPY]   {short}: {coins}")
-                else:
-                    logger.debug(f"[HL-WATCH]  {short}: {coins}")
+                if tel["poll_error"]:
+                    logger.warning(
+                        f"[HL-COPY]   {self._short(wallet)} Poll-Fehler: {tel['poll_error']}"
+                    )
 

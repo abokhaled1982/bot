@@ -1,36 +1,53 @@
 """
 dashboard/tabs/copytrader.py — Hyperliquid Copy-Trader Dashboard
 
-Layout (3 Tabs, keine Redundanz):
-  🏠 Übersicht    — Kontostand, Modus, wie viele Trader kopiert werden, Live-Feed
-  👥 Meine Trader — eine aufklappbare Zeile pro Trader; darin Sub-Tabs:
-                    Meine Trades · Trader-Details · Betrag & Copy · Verifikation
-  🔍 Scanner      — Trader finden, Betrag wählen, direkt übernehmen
-  ⚙️ Setup        — Laufzeit-Einstellungen, .env-Anzeige
+ARCHITEKTUR (wichtig zum Debuggen)
+----------------------------------
+Dashboard und Bot sind **zwei getrennte Prozesse**. Dieses Modul erzeugt
+deshalb bewusst KEINEN laufenden Tracker: der Adapter hier dient nur zum
+Schreiben der Trader-Auswahl und für den Leaderboard-Scanner. Alles, was
+"live" aussieht, kommt aus der geteilten SQLite-DB (`src/utils/trader_store.py`),
+die der Bot-Prozess befüllt:
 
-Der Focus-Trader ist kein eigener Tab mehr, sondern die oben angepinnte Zeile
-in "Meine Trader" — persistiert über adapter.set_focus_wallet().
+    bot_heartbeat     → läuft der Bot? steht der WebSocket? DRY_RUN?
+    tracker_state     → pro Trader: WS-Subscription, Fills, Polls, Signale
+    pipeline_events   → was die Pipeline mit jedem Signal gemacht hat
+    positions.json    → meine offenen Binance-Positionen
+    copy_history.json → meine abgeschlossenen Trades
+
+Zeigt das Dashboard "Bot offline", läuft `main.py` nicht — dann trackt auch
+nichts, egal was hier ausgewählt ist.
+
+LAYOUT
+------
+  🏠 Übersicht     — mein Geld, mein Trading-Status, Bot-/Tracking-Zustand, Live-Feed
+  👥 Meine Trader  — eine Zeile pro Trader; Header = Meta, aufgeklappt = Details
+  🔍 Scanner       — Trader finden und mit Betrag übernehmen
+  ⚙️ Setup         — Konfiguration und Pipeline-Protokoll zum Debuggen
 """
 from __future__ import annotations
 
-import asyncio
 import datetime as _dt
 import json
 import os
-import threading
 import time
 
 import pandas as pd
 import streamlit as st
 
+from src.utils import trader_store
+
 HISTORY_PATH = os.getenv("COPY_HISTORY_FILE", "copy_history.json")
 CLOSE_REQUEST_PATH = os.getenv("COPY_CLOSE_REQUEST_FILE", "close_requests.json")
 
+# Ab diesem Alter gilt der Bot-Heartbeat als tot (der Bot schreibt alle 3s).
+HEARTBEAT_STALE_SEC = 15.0
+
 _WINDOW_LABEL = {"day": "1 Tag", "week": "1 Woche", "month": "1 Monat", "allTime": "Gesamt"}
 
-_SIGNAL_ICON = {
-    "COPY_OPEN_LONG": "📈", "COPY_OPEN_SHORT": "📉", "COPY_CLOSE_LONG": "🔴",
-    "COPY_INCREASE": "⬆️", "COPY_DECREASE": "⬇️",
+_EVENT_ICON = {
+    "SIGNAL": "📡", "BUY": "🟢", "SELL": "🔴", "SKIP": "⏭️", "ERROR": "❌",
+    "TRADER_ADDED": "➕", "TRADER_REMOVED": "➖", "TRADER_UPDATED": "✏️",
 }
 
 
@@ -45,28 +62,18 @@ def _load_json(path: str, fallback):
 
 
 def _copy_positions() -> dict:
-    """Own open Binance positions opened by the copy-trader (ignores legacy rows)."""
+    """Eigene offene Binance-Positionen aus dem Copy-Trading (ohne Altlasten)."""
     raw = _load_json("positions.json", {})
     return {s: p for s, p in raw.items() if p.get("source") == "COPY"}
 
 
 def _positions_of(wallet: str, short: str) -> dict:
-    """Own open Binance positions attributed to one HL trader."""
+    """Eigene offene Positionen, die genau diesem HL-Trader zuzuordnen sind."""
     return {
         sym: p for sym, p in _copy_positions().items()
         if p.get("hl_trader_full") == wallet
         or (not p.get("hl_trader_full") and p.get("hl_trader") == short)
     }
-
-
-def _request_close(symbols: list[str], reason: str) -> None:
-    """Ask the bot process to close positions — the dashboard has no executor."""
-    try:
-        with open(CLOSE_REQUEST_PATH, "w", encoding="utf-8") as f:
-            json.dump({"symbols": symbols, "reason": reason,
-                       "requested_at": time.time()}, f, indent=2)
-    except OSError as e:
-        st.error(f"Verkaufs-Anfrage konnte nicht geschrieben werden: {e}")
 
 
 def _history_of(wallet: str, short: str) -> list[dict]:
@@ -82,15 +89,35 @@ def _history_of(wallet: str, short: str) -> list[dict]:
     return out
 
 
+def _request_close(symbols: list[str], reason: str) -> None:
+    """Den Bot-Prozess bitten zu verkaufen — das Dashboard hat keinen Executor."""
+    try:
+        with open(CLOSE_REQUEST_PATH, "w", encoding="utf-8") as f:
+            json.dump({"symbols": symbols, "reason": reason,
+                       "requested_at": time.time()}, f, indent=2)
+    except OSError as e:
+        st.error(f"Verkaufs-Anfrage konnte nicht geschrieben werden: {e}")
+
+
+def _bot_state() -> dict:
+    """Heartbeat des Bot-Prozesses; `alive` ist False, wenn er zu alt ist."""
+    hb = trader_store.get_heartbeat() or {}
+    updated = float(hb.get("updated_at", 0) or 0)
+    age = time.time() - updated if updated else float("inf")
+    hb["age"] = age
+    hb["alive"] = bool(hb) and age < HEARTBEAT_STALE_SEC
+    return hb
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def _binance_balance() -> tuple[float, str]:
-    """(balance, source). Live balance only when keys are set and DRY_RUN is off."""
+    """(Guthaben, Quelle). Echte Abfrage nur mit Keys und DRY_RUN=False."""
     if _dry_run():
         return 0.0, "paper"
     try:
         from src.execution.binance_executor import get_account_balance
         return float(get_account_balance("USDT")), "live"
-    except Exception as e:  # keys missing, network down, ...
+    except Exception as e:  # Keys fehlen, Netz weg, ...
         return 0.0, f"error:{e}"
 
 
@@ -122,6 +149,8 @@ def _fmt_hold(sec: float) -> str:
 
 
 def _fmt_age(sec: float) -> str:
+    if sec == float("inf") or sec != sec:
+        return "nie"
     if sec < 60:
         return f"vor {sec:.0f}s"
     if sec < 3600:
@@ -164,37 +193,64 @@ def _verification_links(wallet: str) -> list[tuple[str, str]]:
     ]
 
 
-# ── Adapter ──────────────────────────────────────────────────────────────────
+def _tracking_badge(track: dict | None, bot_alive: bool) -> tuple[str, str]:
+    """(Badge-HTML, Kurztext) für den Tracking-Zustand eines Traders."""
+    if not bot_alive:
+        return '<span class="badge-loss">⛔ BOT AUS</span>', "main.py läuft nicht"
+    if not track:
+        return ('<span class="badge-warn">⏳ STARTET</span>',
+                "Bot übernimmt gleich")
+    if not track.get("ws_subscribed"):
+        return '<span class="badge-warn">⚠️ KEIN WS</span>', "WebSocket fehlt"
+    last_poll = float(track.get("last_poll_at", 0) or 0)
+    if last_poll and (time.time() - last_poll) > 120:
+        return ('<span class="badge-warn">⚠️ POLL ALT</span>',
+                _fmt_age(time.time() - last_poll))
+    return ('<span class="badge-profit">📡 GETRACKT</span>',
+            f"{int(track.get('fill_count', 0))} Fills")
+
+
+# ── Adapter (nur Steuerung + Scanner, kein Tracking) ─────────────────────────
 
 @st.cache_resource
 def _get_adapter():
+    """Adapter-Instanz OHNE `start()`.
+
+    Das Tracking gehört dem Bot-Prozess. Würde das Dashboard einen zweiten
+    Tracker starten, hätte man doppelte API-Last und zwei Wahrheiten.
+    """
     from src.adapters.hyperliquid_copytrader import HyperliquidCopyTrader
-    adapter = HyperliquidCopyTrader()
-
-    def _run():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(adapter.start())
-
-    threading.Thread(target=_run, daemon=True).start()
-    return adapter
+    return HyperliquidCopyTrader(publish_state=False)
 
 
 # ── Entry ────────────────────────────────────────────────────────────────────
 
 def render():
     adapter = _get_adapter()
+    adapter.refresh()
 
     st.markdown('<h2 style="margin-bottom:0;">🔄 Hyperliquid Copy-Trader</h2>',
                 unsafe_allow_html=True)
     mode = "📝 PAPER (DRY-RUN)" if _dry_run() else "🔴 LIVE"
     st.caption(f"Signale von Hyperliquid-Tradern · Ausführung auf Binance Spot · Modus: {mode}")
 
+    bot = _bot_state()
+    if not bot["alive"]:
+        _banner(
+            "⛔ Bot-Prozess läuft nicht",
+            "Auswahl und Beträge werden gespeichert, aber es wird nichts "
+            "getrackt und nichts gehandelt. Starte den Bot mit "
+            "<code>python main.py</code>."
+            + (f" Letztes Lebenszeichen {_fmt_age(bot['age'])}."
+               if bot.get("updated_at") else ""),
+            "red",
+        )
+
     tab_home, tab_traders, tab_scan, tab_setup = st.tabs(
         ["🏠 Übersicht", "👥 Meine Trader", "🔍 Scanner", "⚙️ Setup"]
     )
     with tab_home:
-        _render_overview(adapter)
+        _render_overview()
     with tab_traders:
         _render_my_traders(adapter)
     with tab_scan:
@@ -205,29 +261,30 @@ def render():
 
 # ── 🏠 Übersicht ─────────────────────────────────────────────────────────────
 
-def _render_overview(adapter):
+def _render_overview():
+    """Meine Zahlen zuerst, dann der Nachweis, dass Bot und Tracking laufen."""
 
     @st.fragment(run_every="3s")
     def _live():
-        status = adapter.status()
-        copied = adapter.get_active_wallets()
+        bot = _bot_state()
+        traders = trader_store.list_traders()
+        tracking = trader_store.get_tracker_state()
+        copied = [t for t in traders if t["is_copied"]]
         my_open = _copy_positions()
         history = _load_json(HISTORY_PATH, [])
         history = history if isinstance(history, list) else []
 
-        # ── Health ──────────────────────────────────────────────────────
-        health = status.get("api_health", "ok")
-        if status["discovering"]:
-            _banner("🔍 Trader-Suche läuft",
-                    "Das HL-Leaderboard wird gescannt. Dauert 30–90s.", "amber")
-        elif health == "rate_limited":
+        health = bot.get("api_health", "ok")
+        if bot["alive"] and health == "rate_limited":
             _banner("⚠️ Hyperliquid rate-limited",
-                    "API wartet auf Reset — Werte kommen aus dem Cache.", "amber")
-        elif health == "unreachable":
+                    "Der Bot wartet auf das API-Reset. Tracking läuft weiter, "
+                    "Kennzahlen kommen kurzzeitig aus dem Cache.", "amber")
+        elif bot["alive"] and health == "unreachable":
             _banner("🔴 Hyperliquid unerreichbar",
-                    "Netzwerkfehler zu api.hyperliquid.xyz. Automatischer Retry läuft.", "red")
+                    "Netzwerkfehler zu api.hyperliquid.xyz — der Bot versucht "
+                    "automatisch erneut zu verbinden.", "red")
 
-        # ── Zeile 1: Geld & Modus ───────────────────────────────────────
+        # ── Zeile 1: Mein Geld ──────────────────────────────────────────
         exposure = sum(float(p.get("size_usdt", 0)) for p in my_open.values())
         realized = sum(float(h.get("pnl_usdt", 0)) for h in history)
         wins = sum(1 for h in history if float(h.get("pnl_usdt", 0)) > 0)
@@ -250,39 +307,46 @@ def _render_overview(adapter):
                          f"{len(history)} geschlossen · {win_rate:.0%} Win-Rate",
                          "#00e6a7" if realized >= 0 else "#ff5c5c"), unsafe_allow_html=True)
         c4.markdown(_kpi("👥 Kopierte Trader", str(len(copied)),
-                         f"{status['tracked_traders']} beobachtet gesamt"),
-                    unsafe_allow_html=True)
+                         f"{len(traders)} insgesamt gewählt"), unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── Zeile 2: Verbindung ─────────────────────────────────────────
-        if status["discovering"]:
-            dot, dot_label = "#ffb400", "SUCHT TRADER"
-        elif health == "rate_limited":
-            dot, dot_label = "#ffb400", "RATE-LIMITED"
-        elif health == "unreachable":
-            dot, dot_label = "#ff5c5c", "UNREACHABLE"
-        elif status["connected"]:
-            dot, dot_label = "#00e6a7", "LIVE"
+        # ── Zeile 2: Läuft die Strategie wirklich? ──────────────────────
+        if bot["alive"]:
+            bot_val, bot_sub, bot_col = "● LÄUFT", f"PID {bot.get('pid', '?')}", "#00e6a7"
         else:
-            dot, dot_label = "#ff5c5c", "VERBINDET"
+            bot_val, bot_sub, bot_col = "● AUS", "python main.py starten", "#ff5c5c"
 
-        next_scan = status.get("next_scan_in")
-        next_label = f"Rescan in {next_scan/3600:.1f}h" if next_scan and next_scan > 0 else "Rescan läuft"
-        ws = "WebSocket verbunden" if status["ws_connected"] else "WebSocket reconnect"
+        ws_ok = sum(1 for t in copied
+                    if tracking.get(t["wallet"], {}).get("ws_subscribed"))
+        if not bot["alive"]:
+            ws_val, ws_sub, ws_col = "—", "Bot offline", "#64748b"
+        elif not copied:
+            ws_val, ws_sub, ws_col = "—", "kein Trader ausgewählt", "#64748b"
+        elif ws_ok == len(copied):
+            ws_val, ws_sub, ws_col = (f"{ws_ok}/{len(copied)}",
+                                      "alle Trader live abonniert", "#00e6a7")
+        else:
+            ws_val, ws_sub, ws_col = (f"{ws_ok}/{len(copied)}",
+                                      "Subscription unvollständig", "#ffb400")
 
+        last_fill = max(
+            (float(tracking.get(t["wallet"], {}).get("last_fill_at", 0) or 0)
+             for t in copied),
+            default=0.0,
+        )
         d1, d2, d3 = st.columns(3)
-        d1.markdown(_kpi("🔌 Hyperliquid", f"● {dot_label}", ws, dot), unsafe_allow_html=True)
-        d2.markdown(_kpi("🔍 Auto-Discovery",
-                         "AN" if status["auto_discover"] else "AUS", next_label),
+        d1.markdown(_kpi("🤖 Bot-Prozess", bot_val, bot_sub, bot_col),
                     unsafe_allow_html=True)
-        d3.markdown(_kpi("🎯 Angepinnt",
-                         _short(adapter.get_focus_wallet() or "") or "keiner",
-                         "bleibt über Neustart erhalten"), unsafe_allow_html=True)
+        d2.markdown(_kpi("📡 WebSocket-Tracking", ws_val, ws_sub, ws_col),
+                    unsafe_allow_html=True)
+        d3.markdown(_kpi("⚡ Letzter Trader-Fill",
+                         _fmt_age(time.time() - last_fill) if last_fill else "—",
+                         "Aktivität der kopierten Trader"), unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── Live-Feed + eigene offene Trades ────────────────────────────
+        # ── Meine offenen Trades + Pipeline-Feed ────────────────────────
         left, right = st.columns([3, 2])
         with left:
             st.markdown('<div class="section-header">📦 Meine offenen Trades</div>',
@@ -309,48 +373,49 @@ def _render_overview(adapter):
                 )
 
         with right:
-            st.markdown('<div class="section-header">📡 Live-Aktivität</div>',
+            st.markdown('<div class="section-header">📡 Was die Pipeline tut</div>',
                         unsafe_allow_html=True)
-            signals = adapter.get_signals()
-            if not signals:
-                st.info(
-                    "Noch keine Signale in diesem Dashboard-Prozess. Trades und "
-                    "PnL oben kommen aus den Dateien des Bots und sind aktuell — "
-                    "der Signal-Feed hier baut sich erst nach dem Verbindungsaufbau auf."
-                )
-            else:
-                html = '<div class="log-terminal" style="max-height:320px">'
-                for s in signals[:12]:
-                    html += (
-                        '<div class="event-row">'
-                        f'<span class="event-icon">{_SIGNAL_ICON.get(s.signal, "•")}</span>'
-                        f'<span class="event-time">vor {s.age_sec:.0f}s</span>'
-                        f'<span class="event-sym">{s.symbol}</span>'
-                        f'<span class="event-msg">{s.trader_short} · ${s.size_usd:,.0f}</span>'
-                        '</div>'
-                    )
-                st.markdown(html + "</div>", unsafe_allow_html=True)
+            _event_feed(limit=12)
 
     _live()
+
+
+def _event_feed(limit: int = 12, wallet: str = "") -> None:
+    """Live-Protokoll der Pipeline-Entscheidungen aus der DB."""
+    events = trader_store.recent_events(limit=limit, wallet=wallet)
+    if not events:
+        st.info(
+            "Noch keine Pipeline-Ereignisse. Sie entstehen, sobald ein "
+            "kopierter Trader eine Position eröffnet oder schließt."
+        )
+        return
+    now = time.time()
+    html = '<div class="log-terminal" style="max-height:340px">'
+    for e in events:
+        html += (
+            '<div class="event-row">'
+            f'<span class="event-icon">{_EVENT_ICON.get(e["kind"], "•")}</span>'
+            f'<span class="event-time">{_fmt_age(now - e["ts"])}</span>'
+            f'<span class="event-sym">{e["symbol"] or _short(e["wallet"])}</span>'
+            f'<span class="event-msg">{e["message"]}</span>'
+            '</div>'
+        )
+    st.markdown(html + "</div>", unsafe_allow_html=True)
 
 
 # ── 👥 Meine Trader ──────────────────────────────────────────────────────────
 
 def _render_my_traders(adapter):
-    focus = adapter.get_focus_wallet() or ""
-    copied = set(adapter.get_active_wallets())
-
-    # Nur bewusst gewählte Trader. Auto-entdeckte gehören in den Scanner, sonst
-    # stünden hier plötzlich 12 fremde Zeilen.
-    chosen = copied | ({focus} if focus else set())
-    ordered = sorted(chosen, key=lambda w: (w != focus, w not in copied, w))
+    bot = _bot_state()
+    traders = trader_store.list_traders()
+    tracking = trader_store.get_tracker_state()
 
     st.markdown('<div class="section-header">👥 Meine Trader</div>',
                 unsafe_allow_html=True)
     st.caption(
         "Hier stehen ausschließlich Trader, die du selbst übernommen hast. "
         "**Kopiert** = der Bot handelt ihn auf Binance. **Angepinnt** = wird "
-        "überwacht und bleibt nach einem Neustart erhalten."
+        "überwacht, aber nicht automatisch gehandelt."
     )
 
     with st.form("add_trader_form", clear_on_submit=True):
@@ -361,73 +426,70 @@ def _render_my_traders(adapter):
                                    step=5.0, label_visibility="collapsed")
         added = a3.form_submit_button("➕ Kopieren", type="primary", width="stretch")
     if added:
-        w = new_wallet.strip()
-        if not w.startswith("0x") or len(w) < 10:
+        wallet = new_wallet.strip()
+        if not wallet.startswith("0x") or len(wallet) < 10:
             st.error("Ungültige Wallet-Adresse.")
         else:
-            adapter.set_copy_size(w, new_size)
-            adapter.activate_wallet(w)
+            adapter.set_copy_size(wallet, new_size)
+            adapter.activate_wallet(wallet)
             st.rerun()
 
-    if not ordered:
+    if not traders:
         st.info(
             "Noch kein Trader übernommen. Gehe zum **🔍 Scanner**, finde einen "
             "passenden Trader und übernimm ihn mit deinem Wunschbetrag."
         )
         return
 
-    _render_bulk_actions(adapter, ordered, copied, focus)
+    _render_bulk_actions(adapter, traders)
 
-    stats = adapter.get_trader_stats()
-    hl_positions = adapter.get_all_positions()
-
-    for wallet in ordered:
+    for trader in traders:
+        wallet = trader["wallet"]
         short = _short(wallet)
-        is_copied = wallet in copied
-        is_focus = wallet == focus
-        override = adapter.get_copy_size(wallet)
-        size = override or _default_size()
+        track = tracking.get(wallet)
         my_open = _positions_of(wallet, short)
         history = _history_of(wallet, short)
         realized = sum(float(h.get("pnl_usdt", 0)) for h in history)
         exposure = sum(float(p.get("size_usdt", 0)) for p in my_open.values())
-        trader_upnl = sum(p["unrealized_pnl"] for p in hl_positions.get(wallet, {}).values())
-        s = stats.get(wallet)
+        hl_positions = (track or {}).get("positions", {})
+        trader_upnl = sum(float(p.get("unrealized_pnl", 0))
+                          for p in hl_positions.values())
 
         with st.container(border=True):
-            _trader_header(short, is_copied, is_focus, size, bool(override),
-                           realized, len(history), len(my_open), exposure,
-                           trader_upnl, s)
-            _trader_controls(adapter, wallet, short, size, is_copied, is_focus)
+            _trader_header(trader, short, track, bot["alive"], realized,
+                           len(history), len(my_open), exposure, trader_upnl)
+            _trader_controls(adapter, trader, short)
 
             with st.expander("▾ Details ansehen", expanded=False):
-                t_mine, t_detail, t_verify = st.tabs(
-                    ["💼 Meine Trades", "🎯 Trader-Details", "🔗 Verifikation"]
+                t_mine, t_track, t_detail, t_verify = st.tabs(
+                    ["💼 Meine Trades", "📡 Tracking", "🎯 Trader-Details", "🔗 Verifikation"]
                 )
                 with t_mine:
                     _tab_my_trades(my_open, history, realized)
+                with t_track:
+                    _tab_tracking(wallet, track, bot["alive"])
                 with t_detail:
-                    _tab_trader_detail(adapter, wallet, hl_positions.get(wallet, {}))
+                    _tab_trader_detail(adapter, wallet, hl_positions)
                 with t_verify:
                     _tab_verify(wallet)
 
 
-def _render_bulk_actions(adapter, ordered: list[str], copied: set[str], focus: str) -> None:
-    open_syms = sorted({
-        sym for w in ordered for sym in _positions_of(w, _short(w))
-    })
+def _render_bulk_actions(adapter, traders: list[dict]) -> None:
+    wallets = [t["wallet"] for t in traders]
+    copied = [t for t in traders if t["is_copied"]]
+    open_syms = sorted({sym for w in wallets for sym in _positions_of(w, _short(w))})
 
     st.markdown(
-        f'<div class="badge-info">{len(ordered)} Trader · {len(copied)} kopiert · '
+        f'<div class="badge-info">{len(traders)} Trader · {len(copied)} kopiert · '
         f'{len(open_syms)} offene Position(en)</div>',
         unsafe_allow_html=True,
     )
     with st.expander("⛔ Alles stoppen / entfernen", expanded=False):
         st.caption(
             "**Stoppen** beendet nur neue Copy-Orders. **Entfernen** löscht "
-            "zusätzlich die gespeicherten Beträge und die Anpinnung. "
-            "**Verkaufen** schließt die offenen Positionen dieser Trader — der "
-            "Bot führt das aus, sobald er die Anfrage sieht (max. 2s)."
+            "zusätzlich Betrag, Anpinnung und Tracking. **Verkaufen** schließt "
+            "die offenen Positionen — der Bot führt das aus, sobald er die "
+            "Anfrage sieht (max. 2s)."
         )
         confirm = st.checkbox("Ja, ausführen", key="bulk_confirm")
 
@@ -437,12 +499,10 @@ def _render_bulk_actions(adapter, ordered: list[str], copied: set[str], focus: s
                      disabled=not confirm, width="stretch"):
             if open_syms:
                 _request_close(open_syms, "MANUAL_STOP_ALL")
-            for w in ordered:
-                adapter.clear_copy_size(w)
-                adapter.deactivate_wallet(w)
-            adapter.clear_focus_wallet()
+            for wallet in wallets:
+                adapter.remove_trader(wallet)
             st.success(
-                f"{len(ordered)} Trader entfernt. "
+                f"{len(wallets)} Trader entfernt. "
                 + (f"Verkauf für {', '.join(open_syms)} angefordert."
                    if open_syms else "Es waren keine Positionen offen.")
             )
@@ -450,8 +510,8 @@ def _render_bulk_actions(adapter, ordered: list[str], copied: set[str], focus: s
 
         if b2.button(f"⏸️ Nur Copy stoppen ({len(copied)})", key="bulk_stop",
                      disabled=not confirm or not copied, width="stretch"):
-            for w in copied:
-                adapter.deactivate_wallet(w)
+            for trader in copied:
+                adapter.deactivate_wallet(trader["wallet"])
             st.rerun()
 
         if open_syms:
@@ -463,39 +523,47 @@ def _render_bulk_actions(adapter, ordered: list[str], copied: set[str], focus: s
                 "Binance verkaufen."
             )
 
-def _trader_header(short: str, is_copied: bool, is_focus: bool, size: float,
-                   has_override: bool, realized: float, closed: int,
-                   open_count: int, exposure: float, trader_upnl: float, stats) -> None:
-    pin = '<span class="badge-info">📌 angepinnt</span> ' if is_focus else ""
-    state = ('<span class="badge-win">🟢 KOPIERT</span>' if is_copied
-             else '<span class="badge-info">👁 BEOBACHTET</span>')
-    amount = (f"${size:,.0f} / Trade" if has_override
-              else f"${size:,.0f} / Trade (Standard)")
+
+def _trader_header(trader: dict, short: str, track: dict | None, bot_alive: bool,
+                   realized: float, closed: int, open_count: int,
+                   exposure: float, trader_upnl: float) -> None:
+    """Kopfzeile eines Traders — alles Wichtige ohne Aufklappen sichtbar."""
+    pin = '<span class="badge-info">📌 angepinnt</span> ' if trader["is_focus"] else ""
+    state = ('<span class="badge-profit">🟢 KOPIERT</span>' if trader["is_copied"]
+             else '<span class="badge-info">👁 NUR BEOBACHTET</span>')
+    badge, badge_sub = _tracking_badge(track, bot_alive)
+
+    size = float(trader["size_usdt"] or 0) or _default_size()
+    amount_sub = "eigener Betrag" if trader["size_usdt"] else "Standard aus .env"
     pnl_color = "#00e6a7" if realized >= 0 else "#ff5c5c"
-    account = f"${stats.total_pnl:,.0f}" if stats else "—"
+    account = float((track or {}).get("account_usd") or trader["account_usd"] or 0)
 
     st.markdown(
-        f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
-        f'margin-bottom:6px">'
+        '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
+        'margin-bottom:6px">'
         f'<span style="font-family:JetBrains Mono,monospace;font-size:1.05rem;'
-        f'font-weight:600">{short}</span>{pin}{state}</div>',
+        f'font-weight:600">{short}</span>{pin}{state}{badge}</div>',
         unsafe_allow_html=True,
     )
     h1, h2, h3, h4, h5 = st.columns(5)
-    h1.markdown(_kpi("💵 Betrag", amount.split(" /")[0], amount.split("/ ")[1]),
-                unsafe_allow_html=True)
-    h2.markdown(_kpi("💰 Mein PnL", f"${realized:+,.2f}",
-                     f"{closed} geschlossen", pnl_color), unsafe_allow_html=True)
+    h1.markdown(_kpi("💵 Betrag", f"${size:,.0f}", amount_sub), unsafe_allow_html=True)
+    h2.markdown(_kpi("💰 Mein PnL", f"${realized:+,.2f}", f"{closed} geschlossen",
+                     pnl_color), unsafe_allow_html=True)
     h3.markdown(_kpi("📦 Offen", str(open_count), f"${exposure:,.0f} eingesetzt"),
                 unsafe_allow_html=True)
     h4.markdown(_kpi("🎯 Trader uPnL", f"${trader_upnl:+,.0f}", "auf Hyperliquid",
                      "#00e6a7" if trader_upnl >= 0 else "#ff5c5c"),
                 unsafe_allow_html=True)
-    h5.markdown(_kpi("🏦 Account", account, "Trader-Guthaben"), unsafe_allow_html=True)
+    h5.markdown(_kpi("📡 Tracking", badge_sub,
+                     f"Account ${account:,.0f}" if account else "Account —"),
+                unsafe_allow_html=True)
 
 
-def _trader_controls(adapter, wallet: str, short: str, size: float,
-                     is_copied: bool, is_focus: bool) -> None:
+def _trader_controls(adapter, trader: dict, short: str) -> None:
+    """Zeilen-Steuerung: Betrag ändern, Copy an/aus, anpinnen, entfernen."""
+    wallet = trader["wallet"]
+    size = float(trader["size_usdt"] or 0) or _default_size()
+
     c1, c2, c3, c4, c5 = st.columns([2, 1.4, 1, 1, 1])
     amount = c1.number_input(
         "Betrag pro Trade (USDT)", min_value=1.0, max_value=100000.0,
@@ -503,21 +571,22 @@ def _trader_controls(adapter, wallet: str, short: str, size: float,
         help="Gilt nur für diesen Trader und überschreibt "
              "BINANCE_POSITION_SIZE_USDT aus der .env.",
     )
-    copy_on = c2.checkbox("Copy aktiv", value=is_copied, key=f"copy_{wallet}")
+    copy_on = c2.checkbox("Copy aktiv", value=bool(trader["is_copied"]),
+                          key=f"copy_{wallet}")
 
     c3.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
     if c3.button("💾 Speichern", key=f"save_{wallet}", type="primary", width="stretch"):
         adapter.set_copy_size(wallet, amount)
-        if copy_on and not is_copied:
+        if copy_on and not trader["is_copied"]:
             adapter.activate_wallet(wallet)
-        elif not copy_on and is_copied:
+        elif not copy_on and trader["is_copied"]:
             adapter.deactivate_wallet(wallet)
         st.rerun()
 
     c4.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-    pin_label = "📌 Lösen" if is_focus else "📌 Anpinnen"
+    pin_label = "📌 Lösen" if trader["is_focus"] else "📌 Anpinnen"
     if c4.button(pin_label, key=f"pin_{wallet}", width="stretch"):
-        if is_focus:
+        if trader["is_focus"]:
             adapter.clear_focus_wallet()
         else:
             adapter.set_focus_wallet(wallet)
@@ -528,19 +597,17 @@ def _trader_controls(adapter, wallet: str, short: str, size: float,
         open_syms = list(_positions_of(wallet, short))
         if open_syms:
             _request_close(open_syms, "MANUAL_REMOVE_TRADER")
-        adapter.clear_copy_size(wallet)
-        adapter.deactivate_wallet(wallet)
-        if is_focus:
-            adapter.clear_focus_wallet()
+        adapter.remove_trader(wallet)
         st.rerun()
 
     mode = "📝 DRY-RUN — Orders werden simuliert" if _dry_run() else "🔴 LIVE — echtes Geld"
     st.caption(
-        f"{mode} · Konsolen-Log: `[HL-{'COPY' if is_copied else 'WATCH'}]` für {short} · "
-        f"Entfernen verkauft offene Positionen dieses Traders"
+        f"{mode} · Konsolen-Präfix `[HL-{'COPY' if trader['is_copied'] else 'WATCH'}]` "
+        f"für {short} · Entfernen verkauft offene Positionen dieses Traders"
     )
 
 
+# ── Trader-Details (Sub-Tabs) ────────────────────────────────────────────────
 
 def _tab_my_trades(my_open: dict, history: list[dict], realized: float) -> None:
     st.markdown("**Offene Positionen**")
@@ -603,16 +670,65 @@ def _tab_my_trades(my_open: dict, history: list[dict], realized: float) -> None:
     )
 
 
+def _tab_tracking(wallet: str, track: dict | None, bot_alive: bool) -> None:
+    """Nachweis, dass dieser Trader wirklich live verfolgt wird."""
+    if not bot_alive:
+        st.error(
+            "Der Bot-Prozess läuft nicht — für diesen Trader wird aktuell nichts "
+            "getrackt und nichts gehandelt. Starte `python main.py`."
+        )
+        return
+    if not track:
+        st.warning(
+            "Der Bot hat diesen Trader noch nicht übernommen. Er liest die "
+            "Auswahl alle paar Sekunden neu ein — kurz warten."
+        )
+        return
+
+    now = time.time()
+    ws_ok = bool(track.get("ws_subscribed"))
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(_kpi("📡 WebSocket", "abonniert" if ws_ok else "nicht abonniert",
+                     _fmt_age(now - float(track.get("ws_sub_at") or now)) if ws_ok else "—",
+                     "#00e6a7" if ws_ok else "#ff5c5c"), unsafe_allow_html=True)
+    c2.markdown(_kpi("⚡ Fills gesehen", str(int(track.get("fill_count", 0))),
+                     _fmt_age(now - float(track["last_fill_at"]))
+                     if track.get("last_fill_at") else "noch keiner"),
+                unsafe_allow_html=True)
+    c3.markdown(_kpi("🔁 REST-Polls", str(int(track.get("poll_count", 0))),
+                     _fmt_age(now - float(track["last_poll_at"]))
+                     if track.get("last_poll_at") else "nie"), unsafe_allow_html=True)
+    c4.markdown(_kpi("📶 Copy-Signale", str(int(track.get("signal_count", 0))),
+                     _fmt_age(now - float(track["last_signal_at"]))
+                     if track.get("last_signal_at") else "noch keins"),
+                unsafe_allow_html=True)
+
+    if track.get("poll_error"):
+        st.error(f"Letzter Poll-Fehler: {track['poll_error']}")
+
+    st.caption(
+        f"Zuletzt vom Bot aktualisiert: "
+        f"{_fmt_age(now - float(track.get('updated_at') or now))} · "
+        f"Copy-Status im Bot: "
+        f"{'aktiv' if track.get('is_copied') else 'nur Beobachtung'}"
+    )
+
+    st.markdown("**Pipeline-Ereignisse zu diesem Trader**")
+    _event_feed(limit=25, wallet=wallet)
+
+
 def _tab_trader_detail(adapter, wallet: str, live_positions: dict) -> None:
     if live_positions:
-        st.markdown("**Aktuelle Positionen des Traders (live)**")
+        st.markdown("**Aktuelle Positionen des Traders (vom Bot getrackt)**")
         st.dataframe(
             pd.DataFrame([{
                 "Coin":  coin,
-                "Seite": "LONG" if p["size"] > 0 else "SHORT",
-                "Wert":  p["value_usd"], "Entry": p["entry_px"],
-                "Hebel": p["leverage"], "PnL %": p["pnl_pct"],
-                "PnL $": p["unrealized_pnl"],
+                "Seite": "LONG" if float(p.get("size", 0)) > 0 else "SHORT",
+                "Wert":  float(p.get("value_usd", 0)),
+                "Entry": float(p.get("entry_px", 0)),
+                "Hebel": float(p.get("leverage", 0)),
+                "PnL %": float(p.get("pnl_pct", 0)),
+                "PnL $": float(p.get("unrealized_pnl", 0)),
             } for coin, p in live_positions.items()]),
             width="stretch", hide_index=True,
             column_config={
@@ -642,25 +758,25 @@ def _tab_trader_detail(adapter, wallet: str, live_positions: dict) -> None:
 
     cols = st.columns(4)
     for col, name in zip(cols, ("day", "week", "month", "allTime")):
-        m = focus["metrics_by_window"].get(name)
+        metrics = focus["metrics_by_window"].get(name)
         with col:
-            if m is None:
+            if metrics is None:
                 st.markdown(_kpi(f"📅 {_WINDOW_LABEL[name]}", "—",
                                  "keine geschlossenen Trades", "#64748b"),
                             unsafe_allow_html=True)
                 continue
-            color = ("#00e6a7" if m.win_rate >= 0.55
-                     else "#ffb400" if m.win_rate >= 0.45 else "#ff5c5c")
-            st.markdown(_kpi(f"📅 {_WINDOW_LABEL[name]}", f"{m.win_rate:.0%}",
-                             f"{m.trades} Trades · Ø {_fmt_hold(m.avg_hold_sec)}", color),
-                        unsafe_allow_html=True)
+            color = ("#00e6a7" if metrics.win_rate >= 0.55
+                     else "#ffb400" if metrics.win_rate >= 0.45 else "#ff5c5c")
+            st.markdown(_kpi(f"📅 {_WINDOW_LABEL[name]}", f"{metrics.win_rate:.0%}",
+                             f"{metrics.trades} Trades · Ø {_fmt_hold(metrics.avg_hold_sec)}",
+                             color), unsafe_allow_html=True)
 
     st.markdown("<br>**Letzte Fills des Traders**", unsafe_allow_html=True)
     fills = focus.get("recent_fills", [])
     if not fills:
         st.caption("Keine Fills verfügbar.")
         return
-    now = _dt.datetime.now().timestamp()
+    now = time.time()
     st.dataframe(
         pd.DataFrame([{
             "Alter":      _fmt_age(now - float(f.get("time", 0)) / 1000.0),
@@ -737,10 +853,12 @@ def _render_scanner(adapter):
                 progress_cb=_progress,
             )
         except Exception as e:
-            bar.empty(); note.empty()
+            bar.empty()
+            note.empty()
             st.error(f"Scan fehlgeschlagen: {e}")
             return
-        bar.empty(); note.empty()
+        bar.empty()
+        note.empty()
         st.session_state["scan_results"] = results
         st.session_state["scan_window"] = window
         st.session_state["scan_ts"] = _dt.datetime.now().strftime("%H:%M:%S")
@@ -771,10 +889,10 @@ def _render_scanner(adapter):
         unsafe_allow_html=True,
     )
 
-    copied = set(adapter.get_active_wallets())
+    chosen = {t["wallet"] for t in trader_store.list_traders() if t["is_copied"]}
     st.dataframe(
         pd.DataFrame([{
-            "Status":        "🟢 kopiert" if r["wallet"] in copied else "—",
+            "Status":        "🟢 kopiert" if r["wallet"] in chosen else "—",
             "Trader":        _short(r["wallet"]),
             "Account":       r["account_value"],
             "PnL (Fenster)": r["window_pnl"],
@@ -799,7 +917,6 @@ def _render_scanner(adapter):
         },
     )
 
-    # ── Übernehmen: Trader + Betrag in einem Schritt ────────────────────
     st.markdown('<div class="section-header">➕ Trader übernehmen</div>',
                 unsafe_allow_html=True)
     with st.form("adopt_form"):
@@ -814,8 +931,9 @@ def _render_scanner(adapter):
         adapter.activate_wallet(choice)
         adapter.set_focus_wallet(choice)
         st.success(
-            f"{_short(choice)} wird jetzt mit ${amount:,.0f} pro Trade kopiert "
-            f"und ist im Tab **👥 Meine Trader** oben angepinnt."
+            f"{_short(choice)} wird jetzt mit ${amount:,.0f} pro Trade kopiert. "
+            f"Der Bot übernimmt ihn innerhalb weniger Sekunden — den Nachweis "
+            f"siehst du unter **👥 Meine Trader → 📡 Tracking**."
         )
     st.caption(
         "Übernehmen setzt Betrag, aktiviert Copy-Trading und pinnt den Trader an. "
@@ -827,33 +945,39 @@ def _render_scanner(adapter):
 
 def _render_setup(adapter):
     settings = adapter.get_settings()
+    bot = _bot_state()
 
-    st.markdown('<div class="section-header">⚙️ Laufzeit-Einstellungen</div>',
+    st.markdown('<div class="section-header">🤖 Bot-Prozess</div>',
                 unsafe_allow_html=True)
-    with st.form("settings_form"):
-        c1, c2 = st.columns(2)
-        poll_interval = c1.number_input(
-            "Polling-Intervall (s)", min_value=1.0, max_value=120.0,
-            value=float(settings["poll_interval"]), step=1.0,
-            help="Wie oft die Positionen der Trader abgefragt werden.",
+    if bot["alive"]:
+        started = float(bot.get("started_at", 0) or 0)
+        st.success(
+            f"Läuft (PID {bot.get('pid')}) · gestartet "
+            f"{_fmt_age(time.time() - started) if started else '—'} · "
+            f"WebSocket {'verbunden' if bot.get('ws_connected') else 'getrennt'} · "
+            f"{bot.get('copied', 0)} Trader kopiert · "
+            f"{bot.get('open_trades', 0)} eigene Position(en) · "
+            f"API: {bot.get('api_health', '?')}"
         )
-        min_copy_size = c2.number_input(
-            "Min. Signalgröße auf HL ($)", min_value=0.0,
-            value=float(settings["min_copy_size_usd"]), step=100.0,
-            help="Positionen des Traders unter diesem Wert lösen kein Signal aus. "
-                 "Das ist NICHT dein Einsatz — den setzt du pro Trader.",
+    else:
+        st.error(
+            "Bot-Prozess läuft nicht. Ohne ihn wird nichts getrackt und nichts "
+            "gehandelt — starte ihn mit `python main.py`."
         )
-        if st.form_submit_button("💾 Speichern", type="primary"):
-            adapter.set_poll_interval(poll_interval)
-            adapter.set_min_copy_size(min_copy_size)
-            st.success("Gespeichert.")
 
-    st.markdown('<div class="section-header">🔒 Aus der .env (nur lesend)</div>',
+    st.markdown('<div class="section-header">⚙️ Konfiguration (aus der .env)</div>',
                 unsafe_allow_html=True)
+    st.caption(
+        "Diese Werte liest der Bot-Prozess beim Start aus der `.env`. Eine "
+        "Änderung im Browser würde nur den Dashboard-Prozess betreffen und wäre "
+        "irreführend — deshalb sind sie bewusst nur lesbar."
+    )
     st.markdown(f"""
     <div class="detail-grid">
       <div class="detail-item"><div class="detail-label">Modus</div><div class="detail-value">{"DRY-RUN" if _dry_run() else "LIVE"}</div></div>
       <div class="detail-item"><div class="detail-label">Standard-Betrag</div><div class="detail-value">${_default_size():,.0f}</div></div>
+      <div class="detail-item"><div class="detail-label">Polling-Intervall</div><div class="detail-value">{settings['poll_interval']:.0f}s</div></div>
+      <div class="detail-item"><div class="detail-label">Min. Signalgröße (HL)</div><div class="detail-value">${settings['min_copy_size_usd']:,.0f}</div></div>
       <div class="detail-item"><div class="detail-label">Auto-Discovery</div><div class="detail-value">{"AN" if settings['auto_discover'] else "AUS"}</div></div>
       <div class="detail-item"><div class="detail-label">Max. Trader</div><div class="detail-value">{settings['max_tracked_traders']}</div></div>
       <div class="detail-item"><div class="detail-label">Rescan-Intervall</div><div class="detail-value">{settings['rescan_hours']:.1f}h</div></div>
@@ -862,37 +986,38 @@ def _render_setup(adapter):
       <div class="detail-item"><div class="detail-label">Min. Account-Wert</div><div class="detail-value">${settings['min_account_value']:,.0f}</div></div>
       <div class="detail-item"><div class="detail-label">Max. Ø Haltezeit</div><div class="detail-value">{settings['max_avg_hold_min']:.0f} min</div></div>
       <div class="detail-item"><div class="detail-label">Signal-TTL</div><div class="detail-value">{settings['signal_ttl']:.0f}s</div></div>
-      <div class="detail-item"><div class="detail-label">Metrik-Cache</div><div class="detail-value">{settings['metrics_cache_ttl_min']:.0f} min</div></div>
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown('<div class="section-header">📡 Signal-Log</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">🧾 Pipeline-Protokoll</div>',
+                unsafe_allow_html=True)
+    st.caption(
+        "Jede Entscheidung der Pipeline: Signal empfangen, übersprungen (mit "
+        "Grund), gekauft, verkauft. Erste Anlaufstelle beim Debuggen."
+    )
     f1, f2 = st.columns(2)
-    symbol_filter = f1.text_input("Symbol filtern", "").strip().upper()
-    max_rows = f2.slider("Max. Zeilen", 10, 200, 50)
+    kind_filter = f1.selectbox("Kategorie", ["alle"] + sorted(_EVENT_ICON),
+                               key="event_kind")
+    max_rows = f2.slider("Max. Zeilen", 20, 300, 100, key="event_rows")
 
     @st.fragment(run_every="3s")
-    def _signals_live():
-        signals = adapter.get_signals()
-        if symbol_filter:
-            signals = [s for s in signals if symbol_filter in s.symbol]
-        signals = signals[:max_rows]
-        if not signals:
-            st.caption("Keine Signale.")
+    def _events_live():
+        events = trader_store.recent_events(limit=max_rows)
+        if kind_filter != "alle":
+            events = [e for e in events if e["kind"] == kind_filter]
+        if not events:
+            st.caption("Noch keine Ereignisse protokolliert.")
             return
         st.dataframe(
             pd.DataFrame([{
-                "Alter": s.age_sec, "Trader": s.trader_short, "Signal": s.signal,
-                "Symbol": s.symbol, "Größe": s.size_usd, "Entry": s.entry_price,
-                "Hebel": s.leverage, "PnL %": s.pnl_pct,
-            } for s in signals]),
+                "Zeit":    _dt.datetime.fromtimestamp(e["ts"]).strftime("%d.%m %H:%M:%S"),
+                "Typ":     e["kind"],
+                "Level":   e["level"],
+                "Trader":  _short(e["wallet"]) if e["wallet"] else "",
+                "Symbol":  e["symbol"],
+                "Meldung": e["message"],
+            } for e in events]),
             width="stretch", hide_index=True,
-            column_config={
-                "Alter": st.column_config.NumberColumn("Alter (s)", format="%.0f s"),
-                "Größe": st.column_config.NumberColumn(format="$%.0f"),
-                "Entry": st.column_config.NumberColumn(format="$%.4f"),
-                "Hebel": st.column_config.NumberColumn(format="%.0fx"),
-                "PnL %": st.column_config.NumberColumn(format="%+.2f%%"),
-            },
         )
-    _signals_live()
+
+    _events_live()

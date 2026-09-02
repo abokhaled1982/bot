@@ -33,6 +33,7 @@ from src.execution.binance_executor import (
     place_market_buy, place_oco_sell, get_account_balance,
     STOP_LOSS_PCT, TAKE_PROFIT_PCT,
 )
+from src.utils import trader_store
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DRY_RUN       = os.getenv("DRY_RUN", "True").lower() == "true"
@@ -47,7 +48,7 @@ TAKER_FEE     = float(os.getenv("BINANCE_TAKER_FEE_PCT", "0.1"))
 SLIPPAGE_BPS  = float(os.getenv("SCALP_SLIPPAGE_BPS", "2"))
 ROUND_TRIP    = 2 * TAKER_FEE + (2 * SLIPPAGE_BPS / 100)
 
-DB_PATH = "binance_orderflow.db"
+DB_PATH = os.getenv("BOT_DB_PATH", "binance_orderflow.db")
 HISTORY_PATH = os.getenv("COPY_HISTORY_FILE", "copy_history.json")
 CLOSE_REQUEST_PATH = os.getenv("COPY_CLOSE_REQUEST_FILE", "close_requests.json")
 MAX_HISTORY = 500
@@ -164,6 +165,12 @@ def _close_paper_position(
         f"[COPY] SELL {symbol} | {reason} | exit=${exit_price:.4f} | "
         f"net PnL=${pnl_usdt:+.2f} ({pnl_pct:+.2f}%)"
     )
+    trader_store.log_event(
+        "SELL",
+        f"{reason} | Exit ${exit_price:.4f} | PnL ${pnl_usdt:+.2f} ({pnl_pct:+.2f}%)",
+        wallet=position.get("hl_trader_full", ""), symbol=symbol,
+        level="success" if pnl_usdt >= 0 else "warning",
+    )
 
 
 async def _paper_monitor(
@@ -247,6 +254,34 @@ async def _close_request_loop(
 
 
 
+async def _heartbeat_loop(
+    hl_adapter: HyperliquidCopyTrader, positions: dict,
+) -> None:
+    """Lebenszeichen des Bot-Prozesses in die DB schreiben.
+
+    Das Dashboard läuft in einem eigenen Prozess und kann sonst nicht
+    unterscheiden zwischen "Bot läuft und trackt" und "Bot ist gar nicht an".
+    """
+    started = time.time()
+    while True:
+        try:
+            st = hl_adapter.status()
+            await asyncio.to_thread(
+                trader_store.publish_heartbeat,
+                started_at=started,
+                connected=st["connected"],
+                ws_connected=st["ws_connected"],
+                dry_run=DRY_RUN,
+                tracked=st["tracked_traders"],
+                copied=st.get("copied_traders", 0),
+                open_trades=len(positions),
+                api_health=st.get("api_health", "ok"),
+            )
+        except Exception as e:
+            logger.debug(f"[COPY] Heartbeat error: {e}")
+        await asyncio.sleep(3)
+
+
 # ── Signal handler ────────────────────────────────────────────────────────────
 
 async def handle_copy_signal(
@@ -297,6 +332,10 @@ async def handle_copy_signal(
 
     if len(positions) >= MAX_POSITIONS:
         logger.warning(f"[COPY] Max positions {MAX_POSITIONS} reached")
+        trader_store.log_event(
+            "SKIP", f"Positionslimit {MAX_POSITIONS} erreicht",
+            wallet=sig.trader, symbol=symbol, level="warning",
+        )
         return False
 
     # Verify on Binance
@@ -305,6 +344,10 @@ async def handle_copy_signal(
         logger.info(
             f"[COPY] ✖ {symbol} | {sig.trader_short} opened {sig.coin} "
             f"but Binance check failed: {reason}"
+        )
+        trader_store.log_event(
+            "SKIP", f"Binance-Prüfung fehlgeschlagen: {reason}",
+            wallet=sig.trader, symbol=symbol, level="warning",
         )
         return False
 
@@ -329,6 +372,10 @@ async def handle_copy_signal(
     order = place_market_buy(symbol, size_usdt, price)
     if not order:
         logger.error(f"[COPY] Order failed for {symbol}")
+        trader_store.log_event(
+            "ERROR", "Market-Buy von Binance abgelehnt",
+            wallet=sig.trader, symbol=symbol, level="error",
+        )
         return False
 
     exec_price = float(order.get("price", price))
@@ -355,6 +402,13 @@ async def handle_copy_signal(
     }
     positions[symbol] = pos_data
     _save_positions(positions)
+    trader_store.log_event(
+        "BUY",
+        f"{'DRY-RUN' if DRY_RUN else 'LIVE'} Kauf ${size_usdt:,.0f} @ "
+        f"${exec_price:.4f} (Trader: {sig.coin} ${sig.size_usd:,.0f} "
+        f"{sig.leverage:.0f}x)",
+        wallet=sig.trader, symbol=symbol, level="success",
+    )
 
     # DB logging
     try:
@@ -414,7 +468,10 @@ async def main_loop() -> None:
             return
 
     # Initialize adapters
-    hl_adapter = HyperliquidCopyTrader()
+    # publish_state=True: nur dieser Prozess schreibt Tracking-Telemetrie in die
+    # DB — das Dashboard liest sie und zeigt damit den ECHTEN Bot-Zustand,
+    # nicht den seines eigenen Adapter-Objekts.
+    hl_adapter = HyperliquidCopyTrader(publish_state=True)
     bn_adapter = BinanceOrderFlowAdapter()
 
     # Load existing positions
@@ -440,6 +497,7 @@ async def main_loop() -> None:
     asyncio.create_task(bn_adapter.start())
     asyncio.create_task(bn_adapter.cleanup_loop())
     asyncio.create_task(_close_request_loop(bn_adapter, positions))
+    asyncio.create_task(_heartbeat_loop(hl_adapter, positions))
     if DRY_RUN:
         asyncio.create_task(_paper_monitor(bn_adapter, positions))
 
@@ -454,10 +512,14 @@ async def main_loop() -> None:
             await asyncio.sleep(15)
             count += 1
             hl_st = hl_adapter.status()
-            copied = len(hl_adapter.get_active_wallets())
+            copied = hl_st.get("copied_traders", 0)
+            # Ohne gewählten Trader und ohne eigene Position gibt es nichts zu
+            # melden — die Konsole bleibt still, bis wir wirklich handeln.
+            if not copied and not positions:
+                continue
             logger.info(
                 f"── #{count} | Kopiert:{copied} Trader "
-                f"(von {hl_st['tracked_traders']} beobachtet) | "
+                f"({hl_st.get('ws_subscribed', 0)} per WebSocket verbunden) | "
                 f"Meine Positionen:{len(positions)}/{MAX_POSITIONS} ──"
             )
             if not positions:
@@ -492,4 +554,27 @@ async def main_loop() -> None:
             break
 
         sig = await hl_adapter.signal_queue.get()
+        # Zwischen Signal und Verarbeitung kann der Trader im Dashboard
+        # abgeschaltet worden sein — dann darf keine Order mehr rausgehen.
+        if not hl_adapter.is_copied(sig.trader):
+            logger.debug(
+                f"[COPY] Signal {sig.signal} {sig.symbol} verworfen — "
+                f"{sig.trader_short} wird nicht mehr kopiert"
+            )
+            continue
+        if not sig.is_fresh:
+            logger.warning(
+                f"[COPY] Signal {sig.signal} {sig.symbol} von {sig.trader_short} "
+                f"ist {sig.age_sec:.0f}s alt — verworfen"
+            )
+            trader_store.log_event(
+                "SKIP", f"Signal {sig.signal} war {sig.age_sec:.0f}s alt",
+                wallet=sig.trader, symbol=sig.symbol, level="warning",
+            )
+            continue
+        trader_store.log_event(
+            "SIGNAL",
+            f"{sig.signal} {sig.coin} | HL ${sig.size_usd:,.0f} {sig.leverage:.0f}x",
+            wallet=sig.trader, symbol=sig.symbol,
+        )
         await handle_copy_signal(sig, bn_adapter, positions, hl_adapter)
