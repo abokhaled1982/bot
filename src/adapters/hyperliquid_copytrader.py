@@ -130,7 +130,7 @@ def _hl_request(method: str, url: str, **kwargs) -> Optional[requests.Response]:
             return None
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", backoff))
-            logger.warning(f"[HL-COPY] 429 rate limited — backing off {retry_after:.1f}s")
+            logger.debug(f"[HL] 429 rate limited — backing off {retry_after:.1f}s")
             _set_api_health("rate_limited")
             time.sleep(retry_after)
             backoff = min(backoff * 2, 10.0)
@@ -722,16 +722,14 @@ class HyperliquidCopyTrader:
         # einer übernommen wird, startet Tracking + Pipeline ohne Neustart.
         copied = [w for w in self._wallets if self._should_emit_signals_for(w)]
         if copied:
-            logger.info(f"[HL-COPY] Kopiere {len(copied)} Trader:")
-            for i, w in enumerate(copied, 1):
-                size = self._copy_sizes.get(w)
-                amount = f"${size:,.0f}" if size else "Standardbetrag"
-                logger.info(f"[HL-COPY]   #{i}: {self._short(w)} | {amount}/Trade")
-        else:
-            logger.info(
-                "[HL-COPY] Kein Trader ausgewählt — es wird nichts kopiert. "
-                "Im Dashboard unter 🔍 Scanner einen Trader übernehmen."
+            selected = ", ".join(
+                f"{self._short(wallet)} (${self._copy_sizes[wallet]:,.0f})"
+                if wallet in self._copy_sizes else self._short(wallet)
+                for wallet in copied
             )
+            logger.info(f"[INIT] Gewählte Trader: {selected}")
+        else:
+            logger.info("[INIT] Kein Trader ausgewählt")
         if self._auto_wallets:
             logger.debug(
                 f"[HL-COPY] {len(self._auto_wallets)} auto-entdeckte Wallet(s) "
@@ -932,7 +930,7 @@ class HyperliquidCopyTrader:
                 async with websockets.connect(HL_WS_URL) as ws:
                     self._ws_connected = True
                     delay = 5
-                    logger.info("[HL-COPY] ✅ WebSocket connected")
+                    logger.debug("[HL-COPY] WebSocket connected")
                     subscribed: set[str] = set()
                     await self._ws_sync_subscriptions(ws, subscribed)
 
@@ -957,7 +955,7 @@ class HyperliquidCopyTrader:
                 self._ws_connected = False
                 for tel in self._telemetry.values():
                     tel["ws_subscribed"] = False
-                logger.warning(f"[HL-COPY] WS reconnect in {delay}s: {e}")
+                logger.debug(f"[HL] WS reconnect in {delay}s: {e}")
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60)
 
@@ -979,10 +977,7 @@ class HyperliquidCopyTrader:
             tel["ws_subscribed"] = True
             tel["ws_sub_at"] = time.time()
             if self._should_emit_signals_for(wallet):
-                logger.info(
-                    f"[HL-COPY] 📡 WebSocket abonniert: {self._short(wallet)} — "
-                    f"Fills werden ab jetzt live verfolgt"
-                )
+                logger.debug(f"[HL-COPY] WebSocket abonniert: {self._short(wallet)}")
 
         for wallet in subscribed - wanted:
             try:
@@ -1004,10 +999,6 @@ class HyperliquidCopyTrader:
                 return
             short = f"{user[:6]}...{user[-4:]}"
             is_copied = self._should_emit_signals_for(user)
-            # Only traders we actually copy are worth console noise; the rest are
-            # discovery candidates and stay on DEBUG.
-            emit = logger.info if is_copied else logger.debug
-            tag = "COPY" if is_copied else "WATCH"
             tel = self._tel(user)
             for f in data.get("fills", []) or []:
                 try:
@@ -1020,13 +1011,15 @@ class HyperliquidCopyTrader:
                     arrow = "🟢 BUY " if side == "B" else "🔴 SELL"
                     tel["fill_count"] += 1
                     tel["last_fill_at"] = float(f.get("time", 0) or 0) / 1000.0 or time.time()
-                    emit(
-                        f"[HL-{tag}] {arrow} {short} | {coin} | "
-                        f"{sz:.4f} @ ${px:.4f} = ${sz * px:,.0f} | "
-                        f"{direction} | PnL: ${closed_pnl:+,.2f}"
-                    )
+                    if is_copied:
+                        logger.debug(
+                            f"[HL-COPY] Fill {arrow} {short} | {coin} | "
+                            f"{sz:.4f} @ ${px:.4f} | {direction} | "
+                            f"PnL: ${closed_pnl:+,.2f}"
+                        )
                 except Exception as e:
-                    logger.debug(f"[HL-{tag}] fill parse: {e}")
+                    if is_copied:
+                        logger.debug(f"[HL-COPY] Fill konnte nicht gelesen werden: {e}")
             await asyncio.sleep(0.5)
             await self._poll_trader(user, emit_signals=True)
 
@@ -1046,14 +1039,13 @@ class HyperliquidCopyTrader:
                             trader_store.update_trader_stats, wallet,
                             account_usd=stats.total_pnl, trades=stats.total_trades,
                         )
-                    emit = logger.info if is_copied else logger.debug
-                    emit(
+                    logger.debug(
                         f"[HL-COPY] 📊 {self._short(wallet)} | "
                         f"Account: ${stats.total_pnl:,.0f} | "
                         f"Fills: {stats.total_trades}"
                     )
             except Exception as e:
-                logger.error(f"[HL-COPY] Stats error: {e}")
+                logger.debug(f"[HL] Stats error: {e}")
 
     # ── Auto-Discovery ────────────────────────────────────────────────────────
 
@@ -1085,7 +1077,7 @@ class HyperliquidCopyTrader:
                     f"Beobachtungs-Wallet(s), {len(self._wallets)} getrackt gesamt"
                 )
             except Exception as e:
-                logger.error(f"[HL-COPY] Rescan error: {e}")
+                logger.debug(f"[HL] Rescan error: {e}")
 
     def _discover_scalpers(self) -> list[str]:
         """Scan the HL leaderboard for active, high-frequency, high-winrate scalpers."""
@@ -1150,7 +1142,7 @@ class HyperliquidCopyTrader:
             resp.raise_for_status()
             return resp.json().get("leaderboardRows", [])
         except Exception as e:
-            logger.error(f"[HL-COPY] Leaderboard fetch failed: {e}")
+            logger.debug(f"[HL] Leaderboard fetch failed: {e}")
             return []
 
     @staticmethod
@@ -1319,7 +1311,7 @@ class HyperliquidCopyTrader:
                 continue
 
             st = self.status()
-            logger.info(
+            logger.debug(
                 f"[HL] Tracking | WS:{'auf' if st['ws_connected'] else 'ab'} | "
                 f"{st['ws_subscribed']}/{len(copied)} Trader abonniert | "
                 f"Polls:{st['poll_count']} | frische Signale:{st['fresh_signals']}"
@@ -1336,14 +1328,14 @@ class HyperliquidCopyTrader:
                             if tel["last_fill_at"] else "noch keiner")
                 poll_age = (f"{now - tel['last_poll_at']:.0f}s"
                             if tel["last_poll_at"] else "nie")
-                logger.info(
+                logger.debug(
                     f"[HL-COPY]   {self._short(wallet)} | "
                     f"WS:{'✓' if tel['ws_subscribed'] else '✗'} | "
                     f"Fills:{tel['fill_count']} (letzter {fill_age}) | "
                     f"Poll vor {poll_age} | Signale:{tel['signal_count']} | {coins}"
                 )
                 if tel["poll_error"]:
-                    logger.warning(
+                    logger.debug(
                         f"[HL-COPY]   {self._short(wallet)} Poll-Fehler: {tel['poll_error']}"
                     )
 

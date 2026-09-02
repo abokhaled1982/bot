@@ -47,6 +47,7 @@ _WINDOW_LABEL = {"day": "1 Tag", "week": "1 Woche", "month": "1 Monat", "allTime
 
 _EVENT_ICON = {
     "SIGNAL": "📡", "BUY": "🟢", "SELL": "🔴", "SKIP": "⏭️", "ERROR": "❌",
+    "SIMULATION": "🧪",
     "TRADER_ADDED": "➕", "TRADER_REMOVED": "➖", "TRADER_UPDATED": "✏️",
 }
 
@@ -713,6 +714,59 @@ def _tab_tracking(wallet: str, track: dict | None, bot_alive: bool) -> None:
         f"{'aktiv' if track.get('is_copied') else 'nur Beobachtung'}"
     )
 
+    st.markdown("**Copy-Pipeline sicher testen**")
+    if not _dry_run():
+        st.warning("Simulation gesperrt: Sie ist ausschließlich mit `DRY_RUN=True` erlaubt.")
+    else:
+        coin = st.text_input(
+            "Binance-Coin", value="BTC", key=f"sim_coin_{wallet}",
+            help="Zum Beispiel BTC oder ETH. Geprüft und gehandelt wird COINUSDT.",
+        ).strip().upper()
+        symbol = f"{coin}USDT"
+        own_positions = _positions_of(wallet, _short(wallet))
+        disabled = not bool(track.get("is_copied")) or not coin.isalnum()
+        buy_col, sell_col = st.columns(2)
+        if buy_col.button(
+            f"🧪 PAPER BUY {symbol}", key=f"sim_buy_{wallet}",
+            type="primary", width="stretch", disabled=disabled or symbol in own_positions,
+        ):
+            request_id = trader_store.enqueue_simulation(wallet, "BUY", coin)
+            st.success(f"Testauftrag #{request_id} an den Bot gesendet.")
+            st.rerun()
+        if sell_col.button(
+            f"🧪 PAPER SELL {symbol}", key=f"sim_sell_{wallet}",
+            width="stretch", disabled=disabled or symbol not in own_positions,
+        ):
+            request_id = trader_store.enqueue_simulation(wallet, "SELL", coin)
+            st.success(f"Testauftrag #{request_id} an den Bot gesendet.")
+            st.rerun()
+        if disabled:
+            st.caption("Aktiviere zuerst **Copy aktiv** und speichere die Trader-Zeile.")
+        elif symbol not in own_positions:
+            st.caption("BUY durchläuft die echte Copy-Pipeline. SELL wird erst aktiv, wenn die Paper-Position offen ist.")
+        else:
+            st.caption(f"{symbol} ist als Paper-Position offen; SELL schließt sie über denselben Signal-Handler.")
+
+        @st.fragment(run_every="2s")
+        def _simulation_status() -> None:
+            simulations = trader_store.recent_simulations(wallet=wallet, limit=5)
+            if not simulations:
+                return
+            labels = {"pending": "wartet", "processing": "läuft",
+                      "done": "erfolgreich", "failed": "fehlgeschlagen"}
+            st.dataframe(
+                pd.DataFrame([{
+                    "ID": row["id"],
+                    "Zeit": _dt.datetime.fromtimestamp(row["created_at"]).strftime("%H:%M:%S"),
+                    "Aktion": f"{row['action']} {row['coin']}USDT",
+                    "Status": labels.get(row["status"], row["status"]),
+                    "Ergebnis": row["result"],
+                } for row in simulations]),
+                width="stretch", hide_index=True,
+            )
+
+        _simulation_status()
+
     st.markdown("**Pipeline-Ereignisse zu diesem Trader**")
     _event_feed(limit=25, wallet=wallet)
 
@@ -779,17 +833,24 @@ def _tab_trader_detail(adapter, wallet: str, live_positions: dict) -> None:
     now = time.time()
     st.dataframe(
         pd.DataFrame([{
+            "Zeitpunkt":  _dt.datetime.fromtimestamp(
+                float(f.get("time", 0)) / 1000.0
+            ).strftime("%d.%m.%Y %H:%M:%S"),
             "Alter":      _fmt_age(now - float(f.get("time", 0)) / 1000.0),
             "Coin":       f.get("coin", ""),
-            "Richtung":   f.get("dir", ""),
+            "Seite":      "BUY" if f.get("side") == "B" else "SELL",
+            "Aktion":     f.get("dir", ""),
             "Preis":      float(f.get("px", "0") or "0"),
-            "Größe":      float(f.get("sz", "0") or "0"),
+            "Menge":      float(f.get("sz", "0") or "0"),
+            "Wert USD":   float(f.get("px", "0") or "0")
+                          * float(f.get("sz", "0") or "0"),
             "Closed PnL": float(f.get("closedPnl", "0") or "0"),
         } for f in fills]),
         width="stretch", hide_index=True,
         column_config={
             "Preis":      st.column_config.NumberColumn(format="$%.4f"),
-            "Größe":      st.column_config.NumberColumn(format="%.4f"),
+            "Menge":      st.column_config.NumberColumn(format="%.4f"),
+            "Wert USD":   st.column_config.NumberColumn(format="$%.2f"),
             "Closed PnL": st.column_config.NumberColumn(format="$%+.2f"),
         },
     )

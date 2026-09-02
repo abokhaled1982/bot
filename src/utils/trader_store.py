@@ -101,6 +101,16 @@ _SCHEMA = (
         message TEXT NOT NULL DEFAULT ''
     )""",
     "CREATE INDEX IF NOT EXISTS idx_pipeline_events_ts ON pipeline_events(ts DESC)",
+    """CREATE TABLE IF NOT EXISTS simulation_requests (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at  REAL NOT NULL,
+        updated_at  REAL NOT NULL,
+        wallet      TEXT NOT NULL,
+        action      TEXT NOT NULL,
+        coin        TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'pending',
+        result      TEXT NOT NULL DEFAULT ''
+    )""",
 )
 
 # So viele Ereignisse bleiben erhalten; ältere werden beim Schreiben gekappt.
@@ -374,6 +384,71 @@ def recent_events(limit: int = 100, wallet: str = "") -> list[dict[str, Any]]:
     try:
         with _connect() as conn:
             return [dict(r) for r in conn.execute(sql, args).fetchall()]
+    except sqlite3.Error:
+        return []
+
+
+# ── simulation_requests (nur PAPER-Modus) ───────────────────────────────────
+
+def enqueue_simulation(wallet: str, action: str, coin: str) -> int:
+    """Einen kontrollierten PAPER-Kauf oder -Verkauf anfordern."""
+    action = action.strip().upper()
+    coin = coin.strip().upper()
+    if action not in {"BUY", "SELL"}:
+        raise ValueError("action muss BUY oder SELL sein")
+    if not wallet.strip() or not coin or not coin.isalnum():
+        raise ValueError("Wallet oder Coin ungültig")
+    now = time.time()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """INSERT INTO simulation_requests
+               (created_at, updated_at, wallet, action, coin)
+               VALUES (?,?,?,?,?)""",
+            (now, now, wallet.strip(), action, coin),
+        )
+        return int(cursor.lastrowid)
+
+
+def claim_simulations(limit: int = 10) -> list[dict[str, Any]]:
+    """Pending-Aufträge atomar beanspruchen, damit jeder genau einmal läuft."""
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT * FROM simulation_requests WHERE status = 'pending' "
+            "ORDER BY id ASC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        ids = [int(row["id"]) for row in rows]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(
+                f"UPDATE simulation_requests SET status = 'processing', "
+                f"updated_at = ? WHERE id IN ({placeholders})",
+                (time.time(), *ids),
+            )
+    return [dict(row) for row in rows]
+
+
+def finish_simulation(request_id: int, success: bool, result: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE simulation_requests SET status = ?, result = ?, updated_at = ? "
+            "WHERE id = ?",
+            ("done" if success else "failed", result[:500], time.time(), int(request_id)),
+        )
+
+
+def recent_simulations(wallet: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM simulation_requests"
+    args: list[Any] = []
+    if wallet:
+        sql += " WHERE wallet = ?"
+        args.append(wallet)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(int(limit))
+    try:
+        with _connect() as conn:
+            return [dict(row) for row in conn.execute(sql, args).fetchall()]
     except sqlite3.Error:
         return []
 

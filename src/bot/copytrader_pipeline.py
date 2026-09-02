@@ -282,6 +282,72 @@ async def _heartbeat_loop(
         await asyncio.sleep(3)
 
 
+async def _simulation_loop(
+    bn_adapter: BinanceOrderFlowAdapter,
+    hl_adapter: HyperliquidCopyTrader,
+    positions: dict,
+) -> None:
+    """Dashboard-Testaufträge über exakt denselben Signal-Handler ausführen."""
+    while True:
+        await asyncio.sleep(1)
+        try:
+            requests = await asyncio.to_thread(trader_store.claim_simulations)
+        except Exception as e:
+            logger.error(f"[SIMULATION] Aufträge konnten nicht gelesen werden: {e}")
+            continue
+
+        for request in requests:
+            wallet = request["wallet"]
+            coin = request["coin"]
+            symbol = f"{coin}USDT"
+            action = request["action"]
+
+            if not DRY_RUN:
+                result = "Abgelehnt: Simulation ist nur mit DRY_RUN=True erlaubt"
+                trader_store.finish_simulation(request["id"], False, result)
+                trader_store.log_event(
+                    "SIMULATION", result, wallet=wallet, symbol=symbol, level="error",
+                )
+                continue
+            if not hl_adapter.is_copied(wallet):
+                result = "Abgelehnt: Trader wird nicht mehr kopiert"
+                trader_store.finish_simulation(request["id"], False, result)
+                continue
+
+            ticker = bn_adapter.get_ticker(symbol)
+            price = float(ticker.get("price_usd", 0)) if ticker else 0.0
+            signal = CopySignal(
+                trader=wallet,
+                coin=coin,
+                symbol=symbol,
+                signal="COPY_OPEN_LONG" if action == "BUY" else "COPY_CLOSE_LONG",
+                size_usd=max(MIN_VOL_24H, 10_000.0),
+                entry_price=price,
+                leverage=1.0,
+                pnl_pct=0.0,
+            )
+            trader_store.log_event(
+                "SIMULATION", f"PAPER-{action} angefordert",
+                wallet=wallet, symbol=symbol,
+            )
+            try:
+                success = await handle_copy_signal(
+                    signal, bn_adapter, positions, hl_adapter,
+                )
+                result = (
+                    f"PAPER-{action} erfolgreich über die Copy-Pipeline ausgeführt"
+                    if success else
+                    f"PAPER-{action} von der Pipeline abgelehnt; Details im Protokoll"
+                )
+                trader_store.finish_simulation(request["id"], success, result)
+            except Exception as e:
+                result = f"PAPER-{action} fehlgeschlagen: {e}"
+                trader_store.finish_simulation(request["id"], False, result)
+                trader_store.log_event(
+                    "ERROR", result, wallet=wallet, symbol=symbol, level="error",
+                )
+
+
 # ── Signal handler ────────────────────────────────────────────────────────────
 
 async def handle_copy_signal(
@@ -298,6 +364,16 @@ async def handle_copy_signal(
         if symbol not in positions:
             return False
         pos = positions[symbol]
+        if not pos.get("dry_run"):
+            logger.error(
+                f"[COPY] LIVE-Close für {symbol} nicht ausgeführt: "
+                "OCO-Abbruch und Market-Sell sind noch nicht implementiert"
+            )
+            trader_store.log_event(
+                "ERROR", "LIVE-Close blockiert: OCO-Abbruch/Market-Sell fehlt",
+                wallet=sig.trader, symbol=symbol, level="error",
+            )
+            return False
         ticker = bn_adapter.get_ticker(symbol)
         price = float(ticker.get("price_usd", 0)) if ticker else 0
         if price <= 0:
@@ -311,6 +387,12 @@ async def handle_copy_signal(
     # ── DECREASE signal: partial close ────────────────────────────────────────
     if sig.signal == "COPY_DECREASE":
         if symbol in positions:
+            if not positions[symbol].get("dry_run"):
+                logger.error(
+                    f"[COPY] LIVE-Decrease für {symbol} nicht ausgeführt: "
+                    "OCO-Abbruch und Market-Sell sind noch nicht implementiert"
+                )
+                return False
             ticker = bn_adapter.get_ticker(symbol)
             price = float(ticker.get("price_usd", 0)) if ticker else 0
             if price > 0:
@@ -341,7 +423,7 @@ async def handle_copy_signal(
     # Verify on Binance
     ok, reason = check_binance_market(symbol, bn_adapter)
     if not ok:
-        logger.info(
+        logger.debug(
             f"[COPY] ✖ {symbol} | {sig.trader_short} opened {sig.coin} "
             f"but Binance check failed: {reason}"
         )
@@ -449,14 +531,11 @@ async def handle_copy_signal(
 
 async def main_loop() -> None:
     """Copy-Trader main loop: HL signals → Binance execution."""
-    logger.info("=" * 65)
-    logger.info("Hyperliquid Copy-Trader → Binance Spot")
-    logger.info(f"DRY_RUN: {DRY_RUN} | Size: ${POSITION_SIZE}/trade")
-    logger.info(f"SL: -{STOP_LOSS_PCT}% | TP: +{TAKE_PROFIT_PCT}%")
-    logger.info(f"Trail: {TRAIL_ACT}%/{TRAIL_GIVE}% | "
-                f"Max hold: {MAX_HOLD_SEC:.0f}s")
-    logger.info(f"Round-trip cost: {ROUND_TRIP:.3f}%")
-    logger.info("=" * 65)
+    logger.info(
+        f"[INIT] Copy-Trader gestartet | "
+        f"{'PAPER' if DRY_RUN else 'LIVE'} | Standard ${POSITION_SIZE:,.0f}/Trade | "
+        f"max. {MAX_POSITIONS} Position(en)"
+    )
 
     if not DRY_RUN:
         bal = get_account_balance("USDT")
@@ -484,7 +563,8 @@ async def main_loop() -> None:
             # trader attribution and would block MAX_POSITIONS forever.
             positions = {s: p for s, p in raw.items() if p.get("source") == "COPY"}
             dropped = len(raw) - len(positions)
-            logger.info(f"Loaded {len(positions)} copy positions")
+            if positions:
+                logger.info(f"[INIT] {len(positions)} eigene Copy-Position(en) geladen")
             if dropped:
                 logger.warning(f"Discarded {dropped} legacy non-copy position(s) from positions.json")
                 _save_positions(positions)
@@ -498,13 +578,14 @@ async def main_loop() -> None:
     asyncio.create_task(bn_adapter.cleanup_loop())
     asyncio.create_task(_close_request_loop(bn_adapter, positions))
     asyncio.create_task(_heartbeat_loop(hl_adapter, positions))
+    asyncio.create_task(_simulation_loop(bn_adapter, hl_adapter, positions))
     if DRY_RUN:
         asyncio.create_task(_paper_monitor(bn_adapter, positions))
 
     # Wait for streams to warm up
-    logger.info("[COPY] Warming up streams (12s)...")
+    logger.debug("[COPY] Warming up streams (12s)...")
     await asyncio.sleep(12)
-    logger.info("[COPY] ⚡ Listening for trader signals...")
+    logger.debug("[COPY] Listening for trader signals")
 
     async def _status() -> None:
         count = 0
@@ -513,9 +594,7 @@ async def main_loop() -> None:
             count += 1
             hl_st = hl_adapter.status()
             copied = hl_st.get("copied_traders", 0)
-            # Ohne gewählten Trader und ohne eigene Position gibt es nichts zu
-            # melden — die Konsole bleibt still, bis wir wirklich handeln.
-            if not copied and not positions:
+            if not positions:
                 continue
             logger.info(
                 f"── #{count} | Kopiert:{copied} Trader "

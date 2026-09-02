@@ -5,6 +5,7 @@ Copies top Hyperliquid traders → executes on Binance Spot.
 import asyncio
 import os
 import sqlite3
+import sys
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -59,14 +60,15 @@ def _log_to_db(msg) -> None:
 
 async def _main() -> None:
     _init_db()
-    logger.add(_log_to_db)
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
+    logger.add(_log_to_db, level="INFO")
     logger.add(
         "logs/bot_{time:YYYY-MM-DD}.log",
         rotation="00:00", retention="14 days",
         level="INFO", enqueue=True,
     )
 
-    logger.info("🔄 Starting COPY-TRADER mode (Hyperliquid → Binance)")
     from src.bot.copytrader_pipeline import main_loop
 
     await main_loop()
