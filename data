@@ -14,3 +14,5 @@ BINANCE_API_KEY=jMO9Jx5U9FGheI4xm8eSePRKCyywS56gpkjpSFde4Zds6Mwin0Od3JlvlUN2VsOK
 BINANCE_SECRET=cM84rXzfMpVhMwKH6CvcpZBb1exGkCw7js7qAQVAQIDYC1Y4mg6Wv7XLjMn5lBPO
 python3 refresh_trader_list.py --dry-run --limit 100 \
   --min-day-roi 5 --min-day-pnl 200 --min-week-roi 5 --min-month-roi 10
+  BNLB_MIN_REQUEST_INTERVAL=0.2 python3 list_saved_traders.py --watch \
+  --workers 5 --hot-interval 1 --cold-batch 100 --interval 1
