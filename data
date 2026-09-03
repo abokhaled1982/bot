@@ -16,3 +16,5 @@ python3 refresh_trader_list.py --dry-run --limit 100 \
   --min-day-roi 5 --min-day-pnl 200 --min-week-roi 5 --min-month-roi 10
   BNLB_MIN_REQUEST_INTERVAL=0.2 python3 list_saved_traders.py --watch \
   --workers 5 --hot-interval 1 --cold-batch 100 --interval 1
+
+  python3 -c "import sqlite3; c=sqlite3.connect('binance_orderflow.db'); c.execute('UPDATE copy_traders SET is_copied=1'); c.commit(); print('aktiviert:', c.execute('SELECT COUNT(*) FROM copy_traders WHERE is_copied=1').fetchone()[0])"
