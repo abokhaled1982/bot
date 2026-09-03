@@ -219,12 +219,28 @@ def _append_events(path: Path, events: list[dict], lock: threading.Lock) -> None
         return
     with lock:
         try:
-            saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
-            if not isinstance(saved, list):
-                saved = []
+            saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            if not isinstance(saved, dict):
+                saved = {}
         except (OSError, json.JSONDecodeError):
-            saved = []
-        saved.extend(events)
+            saved = {}
+        for item in events:
+            uid = item["trader_id"]
+            bucket = saved.setdefault(uid, {
+                "trader_id": uid,
+                "trader_id_short": item["trader_id_short"],
+                "trader_profile_url": item["trader_profile_url"],
+                "trader_positions_url": item["trader_positions_url"],
+                "trader_history_url": item["trader_history_url"],
+                "first_event_at": item["detected_at"]["berlin"] or item["detected_at"]["utc"],
+                "event_count": 0,
+                "events": [],
+            })
+            bucket["last_event_at"] = item["detected_at"]["berlin"] or item["detected_at"]["utc"]
+            bucket["last_action"] = item["action"]
+            bucket["last_symbol"] = item["symbol"]
+            bucket["event_count"] += 1
+            bucket["events"].append(item)
         path.write_text(json.dumps(saved, indent=2, ensure_ascii=True), encoding="utf-8")
     for item in events:
         print(
