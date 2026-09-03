@@ -12,3 +12,5 @@ TOP_PAIRS=20
 SIGNAL_TTL=30
 BINANCE_API_KEY=jMO9Jx5U9FGheI4xm8eSePRKCyywS56gpkjpSFde4Zds6Mwin0Od3JlvlUN2VsOK
 BINANCE_SECRET=cM84rXzfMpVhMwKH6CvcpZBb1exGkCw7js7qAQVAQIDYC1Y4mg6Wv7XLjMn5lBPO
+python3 refresh_trader_list.py --dry-run --limit 100 \
+  --min-day-roi 5 --min-day-pnl 200 --min-week-roi 5 --min-month-roi 10
