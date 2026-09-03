@@ -663,7 +663,7 @@
     "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/4752872648065705473?tab=Positions",
     "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/4752872648065705473?tab=TradeHistory",
     "first_event_at": "2026-09-03 22:25:39 CEST",
-    "event_count": 1,
+    "event_count": 2,
     "events": [
       {
         "event_id": "4752872648065705473:HYPE:1788467139451212766",
@@ -699,10 +699,55 @@
         "pnl_pct": 0.262907712350794,
         "unrealized_pnl": 0.05824,
         "previous_position": null
+      },
+      {
+        "event_id": "4752872648065705473:HYPE:1788469365121343636",
+        "trader_id": "4752872648065705473",
+        "trader_id_short": "475287...5473",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/4752872648065705473?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/4752872648065705473?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/4752872648065705473?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/HYPEUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/HYPEUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788469365.121337,
+          "utc": "2026-09-03T21:02:45.121337+00:00",
+          "berlin": "2026-09-03 23:02:45 CEST"
+        },
+        "position_updated_at": {
+          "unix": 1788469339.447705,
+          "utc": "2026-09-03T21:02:19.447705+00:00",
+          "berlin": "2026-09-03 23:02:19 CEST"
+        },
+        "detection_latency_sec": 25.674,
+        "since_previous_sec": 0.0,
+        "action": "CLOSE_LONG",
+        "side": "LONG",
+        "coin": "HYPE",
+        "symbol": "HYPEUSDT",
+        "size": 0.26,
+        "size_change": 0.0,
+        "value_usd": 22.152260000000002,
+        "value_change_usd": 0.0,
+        "entry_price": 85.20100000000001,
+        "leverage": 8.0,
+        "pnl_pct": 0.13497494160866655,
+        "unrealized_pnl": 0.0299,
+        "previous_position": {
+          "coin": "HYPE",
+          "symbol": "HYPEUSDT",
+          "size": 0.26,
+          "entry_px": 85.20100000000001,
+          "leverage": 8.0,
+          "pnl_pct": 0.13497494160866655,
+          "value_usd": 22.152260000000002,
+          "unrealized_pnl": 0.0299,
+          "updated_at": 1788469339.447705
+        }
       }
     ],
-    "last_event_at": "2026-09-03 22:25:39 CEST",
-    "last_action": "OPEN_LONG",
+    "last_event_at": "2026-09-03 23:02:45 CEST",
+    "last_action": "CLOSE_LONG",
     "last_symbol": "HYPEUSDT"
   },
   "4783360547583601664": {
@@ -1132,5 +1177,123 @@
     "last_event_at": "2026-09-03 22:46:57 CEST",
     "last_action": "REVERSE",
     "last_symbol": "EVAAUSDT"
+  },
+  "5195785655943201537": {
+    "trader_id": "5195785655943201537",
+    "trader_id_short": "519578...1537",
+    "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5195785655943201537?timeRange=30D",
+    "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5195785655943201537?tab=Positions",
+    "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5195785655943201537?tab=TradeHistory",
+    "first_event_at": "2026-09-03 23:02:19 CEST",
+    "event_count": 1,
+    "events": [
+      {
+        "event_id": "5195785655943201537:ETH:1788469339448685862",
+        "trader_id": "5195785655943201537",
+        "trader_id_short": "519578...1537",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5195785655943201537?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5195785655943201537?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5195785655943201537?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/ETHUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/ETHUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788469339.448682,
+          "utc": "2026-09-03T21:02:19.448682+00:00",
+          "berlin": "2026-09-03 23:02:19 CEST"
+        },
+        "position_updated_at": {
+          "unix": 1788469316.9254594,
+          "utc": "2026-09-03T21:01:56.925459+00:00",
+          "berlin": "2026-09-03 23:01:56 CEST"
+        },
+        "detection_latency_sec": 22.523,
+        "since_previous_sec": 0.0,
+        "action": "CLOSE_LONG",
+        "side": "LONG",
+        "coin": "ETH",
+        "symbol": "ETHUSDT",
+        "size": 30.0,
+        "size_change": 0.0,
+        "value_usd": 74700.0,
+        "value_change_usd": 0.0,
+        "entry_price": 2490.0,
+        "leverage": 36.0,
+        "pnl_pct": 0.5859437751004016,
+        "unrealized_pnl": 437.7,
+        "previous_position": {
+          "coin": "ETH",
+          "symbol": "ETHUSDT",
+          "size": 30.0,
+          "entry_px": 2490.0,
+          "leverage": 36.0,
+          "pnl_pct": 0.5859437751004016,
+          "value_usd": 74700.0,
+          "unrealized_pnl": 437.7,
+          "updated_at": 1788469316.9254594
+        }
+      }
+    ],
+    "last_event_at": "2026-09-03 23:02:19 CEST",
+    "last_action": "CLOSE_LONG",
+    "last_symbol": "ETHUSDT"
+  },
+  "4660014202537509120": {
+    "trader_id": "4660014202537509120",
+    "trader_id_short": "466001...9120",
+    "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/4660014202537509120?timeRange=30D",
+    "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/4660014202537509120?tab=Positions",
+    "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/4660014202537509120?tab=TradeHistory",
+    "first_event_at": "2026-09-03 23:02:45 CEST",
+    "event_count": 1,
+    "events": [
+      {
+        "event_id": "4660014202537509120:ZEC:1788469365115518995",
+        "trader_id": "4660014202537509120",
+        "trader_id_short": "466001...9120",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/4660014202537509120?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/4660014202537509120?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/4660014202537509120?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/ZECUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/ZECUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788469365.115509,
+          "utc": "2026-09-03T21:02:45.115509+00:00",
+          "berlin": "2026-09-03 23:02:45 CEST"
+        },
+        "position_updated_at": {
+          "unix": 1788469339.388596,
+          "utc": "2026-09-03T21:02:19.388596+00:00",
+          "berlin": "2026-09-03 23:02:19 CEST"
+        },
+        "detection_latency_sec": 25.727,
+        "since_previous_sec": 0.0,
+        "action": "CLOSE_SHORT",
+        "side": "SHORT",
+        "coin": "ZEC",
+        "symbol": "ZECUSDT",
+        "size": -21.725,
+        "size_change": 0.0,
+        "value_usd": 19999.600500000004,
+        "value_change_usd": 0.0,
+        "entry_price": 920.5800000000002,
+        "leverage": 3.0,
+        "pnl_pct": -3.8293344880063964,
+        "unrealized_pnl": -765.85159941,
+        "previous_position": {
+          "coin": "ZEC",
+          "symbol": "ZECUSDT",
+          "size": -21.725,
+          "entry_px": 920.5800000000002,
+          "leverage": 3.0,
+          "pnl_pct": -3.8293344880063964,
+          "value_usd": 19999.600500000004,
+          "unrealized_pnl": -765.85159941,
+          "updated_at": 1788469339.388596
+        }
+      }
+    ],
+    "last_event_at": "2026-09-03 23:02:45 CEST",
+    "last_action": "CLOSE_SHORT",
+    "last_symbol": "ZECUSDT"
   }
 }

@@ -150,6 +150,13 @@ def _read_positions(uid: str) -> tuple[str, dict[str, dict]]:
     for row in fetch_other_positions(uid):
         position = BinanceLeaderboardTrader._parse_position_row(row)
         if position and abs(position["size"]) > 1e-12:
+            binance_ms = 0
+            for key in ("updateTime", "updateTimeStamp", "modifyTime", "time"):
+                val = row.get(key)
+                if isinstance(val, (int, float)) and val > binance_ms:
+                    binance_ms = val
+            if binance_ms:
+                position["binance_update_ts"] = binance_ms / 1000.0
             positions[position["coin"]] = position
     return uid, positions
 
@@ -159,8 +166,10 @@ def _event(action: str, uid: str, position: dict, previous: dict | None) -> dict
     from src.adapters.binance_leaderboard import binance_leaderboard_url
 
     now = time.time()
-    pos_updated = float(position.get("updated_at", now) or now)
-    prev_updated = float(previous["updated_at"]) if previous else 0.0
+    binance_ts = float(position.get("binance_update_ts") or 0)
+    pos_updated = binance_ts if binance_ts > 0 else float(position.get("updated_at", now) or now)
+    prev_binance_ts = float(previous.get("binance_update_ts") or 0) if previous else 0.0
+    prev_updated = prev_binance_ts if prev_binance_ts > 0 else (float(previous["updated_at"]) if previous else 0.0)
     size_change = position["size"] - previous["size"] if previous else position["size"]
     value_change = position["value_usd"] - previous["value_usd"] if previous else position["value_usd"]
 
@@ -174,9 +183,9 @@ def _event(action: str, uid: str, position: dict, previous: dict | None) -> dict
         "binance_symbol_url": f"https://www.binance.com/en/futures/{position['symbol']}",
         "binance_price_chart_url": f"https://www.binance.com/en/trade/{position['symbol']}?type=spot",
         "detected_at": _fmt_time(now),
-        "position_updated_at": _fmt_time(pos_updated),
-        "detection_latency_sec": round(now - pos_updated, 3) if pos_updated else None,
-        "since_previous_sec": round(pos_updated - prev_updated, 3) if prev_updated else None,
+        "trader_action_at": _fmt_time(binance_ts) if binance_ts > 0 else None,
+        "detection_latency_sec": round(now - binance_ts, 3) if binance_ts > 0 else None,
+        "poll_gap_sec": round(now - prev_updated, 3) if prev_updated else None,
         "action": action,
         "side": "LONG" if position["size"] > 0 else "SHORT",
         "coin": position["coin"],
