@@ -66,9 +66,10 @@ SIGNAL_TTL = float(os.getenv("BNLB_SIGNAL_TTL", "60.0"))
 
 # Auto-discovery
 AUTO_DISCOVER = os.getenv("BNLB_AUTO_DISCOVER", "True").lower() == "true"
+EMIT_AUTO_SIGNALS = os.getenv("BNLB_EMIT_AUTO_SIGNALS", "True").lower() == "true"
 MAX_TRACKED_TRADERS = int(os.getenv("BNLB_MAX_TRADERS", "5"))
 RESCAN_INTERVAL_SEC = float(os.getenv("BNLB_RESCAN_HOURS", "6")) * 3600
-DISCOVERY_POOL = int(os.getenv("BNLB_DISCOVERY_POOL", "50"))
+DISCOVERY_POOL = int(os.getenv("BNLB_DISCOVERY_POOL", "2000"))
 
 # Intraday-Filter: "handelt innerhalb eines Tages mit gutem Profit"
 MIN_DAY_ROI_PCT = float(os.getenv("BNLB_MIN_DAY_ROI_PCT", "3.0"))
@@ -705,6 +706,12 @@ class BinanceLeaderboardTrader:
             return False
         return uid in MANUAL_UIDS or uid in self._manual_active
 
+    def _should_publish_signals_for(self, uid: str) -> bool:
+        """Auto-Trader darf Signale liefern, ohne fuer Copy-Trading aktiviert zu sein."""
+        return self._should_emit_signals_for(uid) or (
+            EMIT_AUTO_SIGNALS and uid in self._auto_uids
+        )
+
     def is_copied(self, uid: str) -> bool:
         return self._should_emit_signals_for(uid)
 
@@ -772,7 +779,9 @@ class BinanceLeaderboardTrader:
         self, window: str = "day", limit: int = 30,
         min_day_roi_pct: float = MIN_DAY_ROI_PCT,
         min_day_pnl_usd: float = MIN_DAY_PNL_USD,
+        min_win_rate_pct: Optional[float] = None,
         min_followers: int = MIN_FOLLOWERS,
+        min_open_positions: int = 0,
         verified_only: bool = True,
         progress_cb: Optional[callable] = None,
     ) -> list[dict]:
@@ -780,7 +789,9 @@ class BinanceLeaderboardTrader:
         del window  # find_intraday_traders bewertet immer alle drei Fenster
         candidates = find_intraday_traders(
             limit=limit, verified_only=verified_only,
+            pool_size=limit,
             min_day_roi_pct=min_day_roi_pct, min_day_pnl_usd=min_day_pnl_usd,
+            min_win_rate_pct=min_win_rate_pct,
             min_followers=min_followers,
         )
         results = []
@@ -788,14 +799,30 @@ class BinanceLeaderboardTrader:
             if progress_cb:
                 progress_cb(i, len(candidates), candidate.uid)
             m = candidate.metrics
+
+            open_symbols: list[str] = []
+            open_positions_count = 0
+            if min_open_positions > 0 or m.position_shared:
+                rows = fetch_other_positions(candidate.uid)
+                for row in rows:
+                    parsed = self._parse_position_row(row)
+                    if parsed and parsed["size"] > 0:
+                        open_symbols.append(parsed["coin"])
+                open_positions_count = len(open_symbols)
+                if min_open_positions > 0 and open_positions_count < min_open_positions:
+                    continue
+
             results.append({
                 "wallet": candidate.uid,
                 "nick_name": m.nick_name,
                 "day_roi": m.day_roi, "day_pnl": m.day_pnl,
+                "win_rate": m.win_rate,
                 "week_roi": m.week_roi, "week_pnl": m.week_pnl,
                 "month_roi": m.month_roi, "month_pnl": m.month_pnl,
                 "follower_count": m.follower_count,
                 "position_shared": m.position_shared,
+                "open_positions_count": open_positions_count,
+                "open_symbols": open_symbols,
                 "last_active_age": m.last_update_age,
                 "quality_score": candidate.quality_score,
                 "verified": candidate.verified,
@@ -962,10 +989,11 @@ class BinanceLeaderboardTrader:
         self._positions[uid] = new_positions
 
     def _diff_positions(self, uid: str, new_pos: dict[str, dict]) -> None:
-        emit_signals = self._should_emit_signals_for(uid)
+        copy_signals = self._should_emit_signals_for(uid)
+        emit_signals = self._should_publish_signals_for(uid)
         old_pos = self._positions.get(uid, {})
         short = self._short(uid)
-        tag = "COPY" if emit_signals else "WATCH"
+        tag = "COPY" if copy_signals else "SIGNAL" if emit_signals else "WATCH"
         log = logger.info if emit_signals else logger.debug
 
         for coin, pos in new_pos.items():

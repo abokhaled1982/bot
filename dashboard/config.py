@@ -242,7 +242,166 @@ DASHBOARD_CSS = """
     /* ── Divider ──────────────────────────────────────────────────────────── */
     .stApp hr { border-color: #151b27 !important; }
 
+    /* ── Current dashboard direction: light, compact, row-based ───────────── */
+    .stApp {
+        background: #f4f7fb !important;
+        color: #172033 !important;
+    }
+    .stApp div, .stApp p, .stApp label,
+    .stApp h1, .stApp h2, .stApp h3, .stApp h4,
+    .stApp td, .stApp th { color: #172033 !important; }
+    .stApp [data-testid="stHeader"] { background: #f4f7fb !important; }
+    .stTabs [data-baseweb="tab-list"] {
+        background: #ffffff !important;
+        border-bottom: 1px solid #d8e0eb !important;
+    }
+    .stTabs [data-baseweb="tab"] { color: #607089 !important; }
+    .stTabs [aria-selected="true"] {
+        color: #087f73 !important;
+        border-bottom-color: #087f73 !important;
+    }
+    .stApp [data-testid="stExpander"],
+    .stApp [data-testid="stExpander"] details,
+    .stApp [data-testid="stExpander"] summary,
+    .stApp [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+        background: #ffffff !important;
+        border-color: #d8e0eb !important;
+    }
+    .stApp [data-testid="stExpander"] summary p,
+    .stApp [data-testid="stExpander"] summary span { color: #172033 !important; }
+    .stApp input, .stApp textarea,
+    .stApp [data-baseweb="select"] > div {
+        background: #ffffff !important;
+        color: #172033 !important;
+        border-color: #cbd5e1 !important;
+    }
+    .kpi-card { background: #ffffff !important; border-color: #d8e0eb !important; border-radius: 6px !important; }
+    .kpi-card .label, .detail-label { color: #087f73 !important; }
+    .kpi-card .value, .detail-value { color: #172033 !important; }
+    .section-header { color: #172033 !important; border-bottom-color: #d8e0eb !important; }
+    .badge-info { color: #1769aa !important; background: #eaf4ff !important; border-color: #b9dcfa !important; }
+    .badge-profit { color: #087f73 !important; background: #e5f7f3 !important; border-color: #a9e4d8 !important; }
+    .badge-warn { color: #946200 !important; background: #fff5d9 !important; border-color: #f1d486 !important; }
+    .badge-loss { color: #b42318 !important; background: #fff0ee !important; border-color: #f2b8b3 !important; }
+    .insight-box { background: #ffffff !important; border-color: #d8e0eb !important; }
+    .insight-box .title, .insight-box .text { color: #334155 !important; }
+    .log-terminal { background: #ffffff !important; border-color: #d8e0eb !important; }
+    .event-row:hover { background: #f5f8fc !important; }
+    .event-time { color: #087f73 !important; }
+    .event-sym { color: #172033 !important; }
+    .event-msg { color: #475569 !important; }
+    .stApp [data-testid="stVerticalBlock"] > div:has(> [data-testid="stHorizontalBlock"]) {
+        border-bottom: 1px solid #e5eaf1;
+        padding-bottom: 10px;
+        margin-bottom: 10px;
+    }
+
     /* ── Plotly chart container ────────────────────────────────────────────── */
     .stPlotlyChart { border-radius: 10px; overflow: hidden; }
+
+    /* ── Scanner: compact trader rows ─────────────────────────────────────── */
+    .scan-row {
+        background: #ffffff;
+        border: 1px solid #d8e0eb;
+        border-radius: 8px;
+        padding: 8px 14px;
+        margin-top: 8px;
+        margin-bottom: 2px;
+        transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    .scan-row:hover {
+        border-color: #087f73;
+        box-shadow: 0 1px 4px rgba(8,127,115,0.08);
+    }
+    .scan-row-main {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        row-gap: 4px;
+    }
+    .scan-row-name {
+        display: flex; align-items: center; gap: 10px;
+        min-width: 240px; flex: 1 1 auto;
+    }
+    .scan-name  { font-weight: 700; color: #172033 !important; font-size: 0.98rem; }
+    .scan-short {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.78rem; color: #64748b !important;
+        background: #f1f5f9; padding: 2px 6px; border-radius: 4px;
+    }
+    .scan-row-metrics {
+        display: flex; align-items: center; gap: 14px;
+        flex-wrap: wrap; row-gap: 4px;
+    }
+    .scan-metric {
+        display: inline-flex; flex-direction: column; align-items: flex-start;
+        line-height: 1.1; min-width: 58px;
+    }
+    .scan-metric em {
+        color: #64748b !important;
+        font-style: normal; font-size: 0.68rem;
+        font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+    }
+    .scan-metric b {
+        color: #172033 !important;
+        font-size: 0.92rem; font-weight: 700;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .scan-metric b.profit { color: #087f73 !important; }
+    .scan-metric b.loss   { color: #b42318 !important; }
+    .scan-live {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding-left: 8px; border-left: 1px solid #e2e8f0;
+    }
+    .scan-live em {
+        color: #64748b !important; font-style: normal;
+        font-size: 0.72rem; font-weight: 500;
+    }
+    .scan-live-list {
+        display: flex; flex-direction: column; gap: 4px;
+        margin: 6px 0 10px;
+    }
+    .scan-live-row {
+        display: flex; gap: 14px; align-items: center;
+        padding: 6px 10px; background: #f8fafc;
+        border: 1px solid #e2e8f0; border-radius: 6px;
+        font-size: 0.86rem;
+    }
+    .scan-live-row b { color: #172033 !important; min-width: 90px; }
+    .scan-live-row span { color: #475569 !important; }
+    .scan-links {
+        margin-top: 10px; font-size: 0.86rem; color: #475569 !important;
+    }
+    .scan-links a { color: #1769aa !important; text-decoration: none; margin: 0 4px; }
+    .scan-links a:hover { text-decoration: underline; }
+
+    /* Compact expander directly under a .scan-row */
+    .stApp [data-testid="stExpander"] { margin-top: 0 !important; margin-bottom: 6px !important; }
+    .stApp [data-testid="stExpander"] summary {
+        padding: 6px 14px !important; font-size: 0.82rem !important;
+    }
+
+    /* ── Pipeline status strip (top of "Meine Trader") ────────────────────── */
+    .pipeline-strip {
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 14px; margin: 4px 0 10px;
+        background: #ffffff;
+        border: 1px solid #d8e0eb;
+        border-radius: 8px;
+        font-size: 0.86rem;
+    }
+    .pipeline-strip em {
+        font-style: normal;
+        color: #64748b !important;
+        font-size: 0.82rem;
+    }
+    .pipeline-strip code {
+        background: #f1f5f9; color: #172033 !important;
+        padding: 1px 6px; border-radius: 4px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.8rem;
+    }
 </style>
 """

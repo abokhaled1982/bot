@@ -9,7 +9,7 @@ Schreiben der Trader-Auswahl und für den Leaderboard-Scanner. Alles, was
 "live" aussieht, kommt aus der geteilten SQLite-DB (`src/utils/trader_store.py`),
 die der Bot-Prozess befüllt:
 
-    bot_heartbeat     → läuft der Bot? steht der WebSocket? DRY_RUN?
+    bot_heartbeat     → läuft der Bot? ist das REST-Polling aktiv? DRY_RUN?
     tracker_state     → pro Trader: WS-Subscription, Fills, Polls, Signale
     pipeline_events   → was die Pipeline mit jedem Signal gemacht hat
     positions.json    → meine offenen Binance-Positionen
@@ -111,9 +111,9 @@ def _bot_state() -> dict:
 
 @st.cache_data(ttl=30, show_spinner=False)
 def _binance_balance() -> tuple[float, str]:
-    """(Guthaben, Quelle). Echte Abfrage nur mit Keys und DRY_RUN=False."""
-    if _dry_run():
-        return 0.0, "paper"
+    """(freies USDT, Quelle). Die Abfrage ist lesend und funktioniert auch im Paper-Modus."""
+    if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_SECRET"):
+        return 0.0, "paper" if _dry_run() else "error:missing_keys"
     try:
         from src.execution.binance_executor import get_account_balance
         return float(get_account_balance("USDT")), "live"
@@ -198,13 +198,13 @@ def _tracking_badge(track: dict | None, bot_alive: bool) -> tuple[str, str]:
         return ('<span class="badge-warn">⏳ STARTET</span>',
                 "Bot übernimmt gleich")
     if not track.get("ws_subscribed"):
-        return '<span class="badge-warn">⚠️ KEIN WS</span>', "WebSocket fehlt"
+        return '<span class="badge-warn">⚠️ NICHT AKTIV</span>', "Polling startet"
     last_poll = float(track.get("last_poll_at", 0) or 0)
     if last_poll and (time.time() - last_poll) > 120:
         return ('<span class="badge-warn">⚠️ POLL ALT</span>',
                 _fmt_age(time.time() - last_poll))
-    return ('<span class="badge-profit">📡 GETRACKT</span>',
-            f"{int(track.get('fill_count', 0))} Fills")
+    return ('<span class="badge-profit">● LIVE POLLING</span>',
+            f"{int(track.get('poll_count', 0))} Abrufe")
 
 
 # ── Adapter (nur Steuerung + Scanner, kein Tracking) ─────────────────────────
@@ -248,8 +248,8 @@ def render():
             "red",
         )
 
-    tab_home, tab_traders, tab_scan, tab_setup = st.tabs(
-        ["🏠 Übersicht", "👥 Meine Trader", "🔍 Scanner", "⚙️ Setup"]
+    tab_home, tab_traders, tab_scan, tab_history, tab_setup = st.tabs(
+        ["🏠 Übersicht", "👥 Meine Trader", "🔍 Scanner", "📜 Historie", "⚙️ Setup"]
     )
     with tab_home:
         _render_overview()
@@ -257,6 +257,8 @@ def render():
         _render_my_traders(adapter)
     with tab_scan:
         _render_scanner(adapter)
+    with tab_history:
+        _render_history()
     with tab_setup:
         _render_setup(adapter)
 
@@ -296,7 +298,7 @@ def _render_overview():
         if source == "live":
             bal_value, bal_sub, bal_color = f"${balance:,.2f}", "freies USDT auf Binance", ""
         elif source == "paper":
-            bal_value, bal_sub, bal_color = "PAPER", "DRY_RUN=True — kein echtes Geld", "#ffb400"
+            bal_value, bal_sub, bal_color = "—", "keine Binance-API-Schlüssel", "#946200"
         else:
             bal_value, bal_sub, bal_color = "—", "Keine API-Keys / Fehler", "#ff5c5c"
 
@@ -319,18 +321,18 @@ def _render_overview():
         else:
             bot_val, bot_sub, bot_col = "● AUS", "python main.py starten", "#ff5c5c"
 
-        ws_ok = sum(1 for t in copied
-                    if tracking.get(t["wallet"], {}).get("ws_subscribed"))
+        poll_ok = sum(1 for t in copied
+                  if tracking.get(t["wallet"], {}).get("last_poll_at"))
         if not bot["alive"]:
             ws_val, ws_sub, ws_col = "—", "Bot offline", "#64748b"
         elif not copied:
             ws_val, ws_sub, ws_col = "—", "kein Trader ausgewählt", "#64748b"
-        elif ws_ok == len(copied):
-            ws_val, ws_sub, ws_col = (f"{ws_ok}/{len(copied)}",
-                                      "alle Trader live abonniert", "#00e6a7")
+        elif poll_ok == len(copied):
+            ws_val, ws_sub, ws_col = (f"{poll_ok}/{len(copied)}",
+                                      "alle Trader werden abgefragt", "#00e6a7")
         else:
-            ws_val, ws_sub, ws_col = (f"{ws_ok}/{len(copied)}",
-                                      "Subscription unvollständig", "#ffb400")
+            ws_val, ws_sub, ws_col = (f"{poll_ok}/{len(copied)}",
+                                      "Polling unvollständig", "#ffb400")
 
         last_fill = max(
             (float(tracking.get(t["wallet"], {}).get("last_fill_at", 0) or 0)
@@ -340,7 +342,7 @@ def _render_overview():
         d1, d2, d3 = st.columns(3)
         d1.markdown(_kpi("🤖 Bot-Prozess", bot_val, bot_sub, bot_col),
                     unsafe_allow_html=True)
-        d2.markdown(_kpi("📡 WebSocket-Tracking", ws_val, ws_sub, ws_col),
+        d2.markdown(_kpi("🔁 REST-Tracking", ws_val, ws_sub, ws_col),
                     unsafe_allow_html=True)
         d3.markdown(_kpi("⚡ Letzter Trader-Fill",
                          _fmt_age(time.time() - last_fill) if last_fill else "—",
@@ -408,16 +410,12 @@ def _event_feed(limit: int = 12, wallet: str = "") -> None:
 # ── 👥 Meine Trader ──────────────────────────────────────────────────────────
 
 def _render_my_traders(adapter):
-    bot = _bot_state()
-    traders = trader_store.list_traders()
-    tracking = trader_store.get_tracker_state()
-
     st.markdown('<div class="section-header">👥 Meine Trader</div>',
                 unsafe_allow_html=True)
     st.caption(
         "Hier stehen ausschließlich Trader, die du selbst übernommen hast. "
-        "**Kopiert** = der Bot handelt ihn auf Binance. **Angepinnt** = wird "
-        "überwacht, aber nicht automatisch gehandelt."
+        "**Kopiert** = der Bot handelt ihn (DRY-RUN = Paper). "
+        "**Angepinnt** = wird überwacht, aber nicht automatisch gehandelt."
     )
 
     with st.form("add_trader_form", clear_on_submit=True):
@@ -436,44 +434,70 @@ def _render_my_traders(adapter):
             adapter.activate_wallet(wallet)
             st.rerun()
 
-    if not traders:
+    traders_snapshot = trader_store.list_traders()
+    if not traders_snapshot:
         st.info(
             "Noch kein Trader übernommen. Gehe zum **🔍 Scanner**, finde einen "
             "passenden Trader und übernimm ihn mit deinem Wunschbetrag."
         )
         return
 
-    _render_bulk_actions(adapter, traders)
+    _render_bulk_actions(adapter, traders_snapshot)
 
-    for trader in traders:
-        wallet = trader["wallet"]
-        short = _short(wallet)
-        track = tracking.get(wallet)
-        my_open = _positions_of(wallet, short)
-        history = _history_of(wallet, short)
-        realized = sum(float(h.get("pnl_usdt", 0)) for h in history)
-        exposure = sum(float(p.get("size_usdt", 0)) for p in my_open.values())
-        lb_positions = (track or {}).get("positions", {})
-        trader_upnl = sum(float(p.get("unrealized_pnl", 0))
-                          for p in lb_positions.values())
+    @st.fragment(run_every="3s")
+    def _live_trader_rows() -> None:
+        bot = _bot_state()
+        bot_alive = bot["alive"]
+        traders = trader_store.list_traders()
+        tracking = trader_store.get_tracker_state()
 
-        with st.container(border=True):
-            _trader_header(trader, short, track, bot["alive"], realized,
-                           len(history), len(my_open), exposure, trader_upnl)
-            _trader_controls(adapter, trader, short)
+        if bot_alive:
+            mode = "DRY-RUN" if _dry_run() else "LIVE"
+            pipe_html = (
+                f'<span class="badge-profit">● PIPELINE LÄUFT · {mode}</span>'
+                f'<em>Heartbeat {_fmt_age(bot["age"])}</em>'
+            )
+        else:
+            pipe_html = (
+                '<span class="badge-loss">⛔ PIPELINE AUS</span>'
+                '<em>starte <code>python3 main.py</code></em>'
+            )
+        st.markdown(
+            f'<div class="pipeline-strip">{pipe_html}</div>',
+            unsafe_allow_html=True,
+        )
 
-            with st.expander("▾ Details ansehen", expanded=False):
+        for trader in traders:
+            wallet = trader["wallet"]
+            short = _short(wallet)
+            track = tracking.get(wallet)
+            my_open = _positions_of(wallet, short)
+            history = _history_of(wallet, short)
+            realized = sum(float(h.get("pnl_usdt", 0)) for h in history)
+            exposure = sum(float(p.get("size_usdt", 0)) for p in my_open.values())
+            lb_positions = (track or {}).get("positions", {}) or {}
+            trader_upnl = sum(float(p.get("unrealized_pnl", 0))
+                              for p in lb_positions.values())
+
+            _trader_row_compact(trader, short, track, bot_alive,
+                                my_open, realized, exposure, trader_upnl,
+                                len(history))
+
+            with st.expander("Details, Steuerung, Verifikation", expanded=False):
+                _trader_controls(adapter, trader, short)
                 t_mine, t_track, t_detail, t_verify = st.tabs(
                     ["💼 Meine Trades", "📡 Tracking", "🎯 Trader-Details", "🔗 Verifikation"]
                 )
                 with t_mine:
                     _tab_my_trades(my_open, history, realized)
                 with t_track:
-                    _tab_tracking(wallet, track, bot["alive"])
+                    _tab_tracking(wallet, track, bot_alive)
                 with t_detail:
                     _tab_trader_detail(adapter, wallet, lb_positions)
                 with t_verify:
                     _tab_verify(wallet)
+
+    _live_trader_rows()
 
 
 def _render_bulk_actions(adapter, traders: list[dict]) -> None:
@@ -526,51 +550,78 @@ def _render_bulk_actions(adapter, traders: list[dict]) -> None:
             )
 
 
-def _trader_header(trader: dict, short: str, track: dict | None, bot_alive: bool,
-                   realized: float, closed: int, open_count: int,
-                   exposure: float, trader_upnl: float) -> None:
-    """Kopfzeile eines Traders — alles Wichtige ohne Aufklappen sichtbar."""
-    pin = '<span class="badge-info">📌 angepinnt</span> ' if trader["is_focus"] else ""
-    state = ('<span class="badge-profit">🟢 KOPIERT</span>' if trader["is_copied"]
-             else '<span class="badge-info">👁 NUR BEOBACHTET</span>')
-    badge, badge_sub = _tracking_badge(track, bot_alive)
-    verification = trader_store.get_verification(trader["wallet"])
+def _trader_row_compact(trader: dict, short: str, track: dict | None,
+                        bot_alive: bool, my_open: dict, realized: float,
+                        exposure: float, trader_upnl: float,
+                        closed_count: int) -> None:
+    """Kompakte Trader-Zeile im Scanner-Stil — Metadaten + Live-Backend-Status."""
+    wallet = trader["wallet"]
+    nick = trader.get("nick_name") or short
+    size = float(trader["size_usdt"] or 0) or _default_size()
+
+    status_pill = (
+        '<span class="badge-profit">KOPIERT</span>' if trader["is_copied"]
+        else '<span class="badge-info">👁 BEOBACHTET</span>'
+    )
+    focus_pill = (
+        '<span class="badge-info">📌 pin</span>' if trader["is_focus"] else ""
+    )
+    verification = trader_store.get_verification(wallet)
     if verification:
         verification_age = time.time() - float(verification["verified_at"])
         score = float(verification["quality_score"])
         if verification_age <= 7 * 86400:
-            verified_badge = (
-                f'<span class="badge-profit">✅ VERIFIZIERT {score:.1f}</span>'
+            verified_pill = (
+                f'<span class="badge-profit">✅ {score:.1f}</span>'
             )
         else:
-            verified_badge = '<span class="badge-warn">⚠️ PRÜFUNG ÄLTER ALS 7T</span>'
+            verified_pill = '<span class="badge-warn">⚠️ 7d+</span>'
     else:
-        verified_badge = '<span class="badge-warn">⚠️ NICHT VERIFIZIERT</span>'
+        verified_pill = '<span class="badge-warn">⚠️ n.v.</span>'
 
-    size = float(trader["size_usdt"] or 0) or _default_size()
-    amount_sub = "eigener Betrag" if trader["size_usdt"] else "Standard aus .env"
-    pnl_color = "#00e6a7" if realized >= 0 else "#ff5c5c"
-    account = float((track or {}).get("account_usd") or trader["account_usd"] or 0)
+    if trader["is_copied"]:
+        live_badge, live_sub = _tracking_badge(track, bot_alive)
+    else:
+        live_badge = '<span class="badge-info">◌ WATCH</span>'
+        live_sub = "kein Copy"
+
+    now = time.time()
+    last_poll = float((track or {}).get("last_poll_at", 0) or 0)
+    poll_age = _fmt_age(now - last_poll) if last_poll else "—"
+    signal_count = int((track or {}).get("signal_count", 0))
+    fill_count = int((track or {}).get("fill_count", 0))
+    last_signal = float((track or {}).get("last_signal_at", 0) or 0)
+    sig_age = _fmt_age(now - last_signal) if last_signal else "—"
+
+    pnl_cls = "profit" if realized >= 0 else "loss"
+    upnl_cls = "profit" if trader_upnl >= 0 else "loss"
+    open_count = len(my_open)
 
     st.markdown(
-        '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
-        'margin-bottom:6px">'
-        f'<span style="font-family:JetBrains Mono,monospace;font-size:1.05rem;'
-        f'font-weight:600">{short}</span>{pin}{state}{verified_badge}{badge}</div>',
+        f'''
+        <div class="scan-row">
+          <div class="scan-row-main">
+            <div class="scan-row-name">
+              <span class="scan-name">{nick}</span>
+              <span class="scan-short">{short}</span>
+              {status_pill}{focus_pill}{verified_pill}
+            </div>
+            <div class="scan-row-metrics">
+              <span class="scan-metric"><em>Betrag</em><b>${size:,.0f}</b></span>
+              <span class="scan-metric"><em>Mein PnL</em><b class="{pnl_cls}">${realized:+,.2f}</b></span>
+              <span class="scan-metric"><em>Offen</em><b>{open_count} · ${exposure:,.0f}</b></span>
+              <span class="scan-metric"><em>Trader uPnL</em><b class="{upnl_cls}">${trader_upnl:+,.0f}</b></span>
+              <span class="scan-metric"><em>Signals</em><b>{signal_count} · {sig_age}</b></span>
+              <span class="scan-metric"><em>Fills</em><b>{fill_count}</b></span>
+              <span class="scan-metric"><em>Poll</em><b>{poll_age}</b></span>
+              <span class="scan-metric"><em>Trades</em><b>{closed_count}</b></span>
+              <span class="scan-live">{live_badge}<em>{live_sub}</em></span>
+            </div>
+          </div>
+        </div>
+        ''',
         unsafe_allow_html=True,
     )
-    h1, h2, h3, h4, h5 = st.columns(5)
-    h1.markdown(_kpi("💵 Betrag", f"${size:,.0f}", amount_sub), unsafe_allow_html=True)
-    h2.markdown(_kpi("💰 Mein PnL", f"${realized:+,.2f}", f"{closed} geschlossen",
-                     pnl_color), unsafe_allow_html=True)
-    h3.markdown(_kpi("📦 Offen", str(open_count), f"${exposure:,.0f} eingesetzt"),
-                unsafe_allow_html=True)
-    h4.markdown(_kpi("🎯 Trader uPnL", f"${trader_upnl:+,.0f}", "auf Binance Futures",
-                     "#00e6a7" if trader_upnl >= 0 else "#ff5c5c"),
-                unsafe_allow_html=True)
-    h5.markdown(_kpi("📡 Tracking", badge_sub,
-                     f"Account ${account:,.0f}" if account else "Account —"),
-                unsafe_allow_html=True)
 
 
 def _trader_controls(adapter, trader: dict, short: str) -> None:
@@ -700,11 +751,11 @@ def _tab_tracking(wallet: str, track: dict | None, bot_alive: bool) -> None:
         return
 
     now = time.time()
-    ws_ok = bool(track.get("ws_subscribed"))
+    polling_ok = bool(track.get("last_poll_at"))
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(_kpi("📡 WebSocket", "abonniert" if ws_ok else "nicht abonniert",
-                     _fmt_age(now - float(track.get("ws_sub_at") or now)) if ws_ok else "—",
-                     "#00e6a7" if ws_ok else "#ff5c5c"), unsafe_allow_html=True)
+    c1.markdown(_kpi("🔁 REST-Polling", "aktiv" if polling_ok else "wartet",
+                     _fmt_age(now - float(track.get("last_poll_at") or now)) if polling_ok else "—",
+                     "#00e6a7" if polling_ok else "#ff5c5c"), unsafe_allow_html=True)
     c2.markdown(_kpi("⚡ Fills gesehen", str(int(track.get("fill_count", 0))),
                      _fmt_age(now - float(track["last_fill_at"]))
                      if track.get("last_fill_at") else "noch keiner"),
@@ -720,7 +771,7 @@ def _tab_tracking(wallet: str, track: dict | None, bot_alive: bool) -> None:
     if track.get("poll_error"):
         st.error(f"Letzter Poll-Fehler: {track['poll_error']}")
 
-    if track.get("is_copied") and ws_ok:
+    if track.get("is_copied") and polling_ok:
         if int(track.get("signal_count", 0)) == 0:
             st.success(
                 "Copy-Pipeline ist bereit. Der Ausgangszustand wurde eingelesen; "
@@ -930,15 +981,53 @@ def _render_scanner(adapter):
         "Mindest-Follower."
     )
 
+    _scan_defaults = {
+        "scan_min_day_roi": 0.0, "scan_min_day_pnl": 0.0,
+        "scan_min_followers": 0, "scan_min_win_rate": 0.0,
+        "scan_min_open_pos": 0, "scan_limit": 30, "scan_only_shared": True,
+    }
+    for _k, _v in _scan_defaults.items():
+        st.session_state.setdefault(_k, _v)
+
+    st.caption(
+        "Tipp für einen End-to-End Test: alle Gates auf 0 lassen (auch negative "
+        "Tages-ROI/-PnL erlaubt) und **öffentliche Positionen** anlassen — sonst "
+        "kann der Bot keine Öffnungen/Änderungen sehen. Beim Klick auf **Copy "
+        "übernehmen** repliziert der Bot beim nächsten Poll (~5 s) alle aktuell "
+        "offenen Longs des Traders mit deinem Betrag."
+    )
+    st.caption(
+        "Hinweis zu **Trades pro Tag**: Die öffentliche Binance-Leaderboard-API "
+        "liefert diesen Wert nicht. Die zuverlässigste Aktivitäts-Näherung ist "
+        "**Min. offene Positionen** — Trader mit vielen offenen Longs handeln "
+        "in der Regel häufiger und liefern schneller Copy-Signale."
+    )
+
     with st.form("scanner_form"):
-        c1, c2, c3, c4 = st.columns(4)
-        min_day_roi = c1.number_input("Min. Tages-ROI (%)", min_value=0.0,
-                                      value=3.0, step=0.5)
-        min_day_pnl = c2.number_input("Min. Tages-PnL ($)", min_value=0.0,
-                                      value=50.0, step=10.0)
-        min_followers = c3.number_input("Min. Follower", min_value=0, value=0, step=10)
-        limit = c4.slider("Max. Ergebnisse", 5, 50, 20, step=5)
-        submitted = st.form_submit_button("🔎 Verifizierte Trader suchen", type="primary",
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        min_day_roi = c1.number_input("Min. Tages-ROI (%)", min_value=-100.0,
+                                      max_value=1000.0, step=0.5,
+                                      key="scan_min_day_roi")
+        min_day_pnl = c2.number_input("Min. Tages-PnL ($)", min_value=-1_000_000.0,
+                                      max_value=10_000_000.0, step=10.0,
+                                      key="scan_min_day_pnl")
+        min_followers = c3.number_input("Min. Follower", min_value=0, step=10,
+                                        key="scan_min_followers")
+        min_win_rate = c4.number_input("Min. Win-Rate (%)", min_value=0.0,
+                                       max_value=100.0, step=5.0,
+                                       key="scan_min_win_rate")
+        min_open_pos = c5.number_input(
+            "Min. offene Positionen", min_value=0, max_value=50, step=1,
+            key="scan_min_open_pos",
+            help="Live-Aktivitätsfilter: prüft pro Kandidat die aktuell offenen "
+                 "Longs (kostet zusätzliche API-Requests). 0 = ignorieren.",
+        )
+        limit = c6.slider("Max. Ergebnisse", 5, 2000, step=5, key="scan_limit")
+        only_shared = st.checkbox(
+            "Nur Trader mit öffentlichen Positionen (Pflicht für Live-Signale)",
+            key="scan_only_shared",
+        )
+        submitted = st.form_submit_button("🔎 Trader suchen", type="primary",
                                           width="stretch")
 
     if submitted:
@@ -952,7 +1041,10 @@ def _render_scanner(adapter):
         try:
             results = adapter.list_leaderboard(
                 limit=limit, min_day_roi_pct=min_day_roi,
-                min_day_pnl_usd=min_day_pnl, min_followers=min_followers,
+                min_day_pnl_usd=min_day_pnl,
+                min_win_rate_pct=min_win_rate or None,
+                min_followers=min_followers,
+                min_open_positions=int(min_open_pos),
                 verified_only=False, progress_cb=_progress,
             )
         except Exception as e:
@@ -962,6 +1054,8 @@ def _render_scanner(adapter):
             return
         bar.empty()
         note.empty()
+        if only_shared:
+            results = [r for r in results if r.get("position_shared")]
         st.session_state["scan_results"] = [
             result for result in results if result["verified"]
         ]
@@ -1017,62 +1111,197 @@ def _render_scanner(adapter):
         unsafe_allow_html=True,
     )
 
-    from src.adapters.binance_leaderboard import binance_leaderboard_url
+    @st.fragment(run_every="5s")
+    def _live_scan_rows() -> None:
+        bot_alive = _bot_state().get("alive", False)
+        chosen = {t["wallet"] for t in trader_store.list_traders() if t["is_copied"]}
+        tracking = trader_store.get_tracker_state()
+        for result in results:
+            wallet = result["wallet"]
+            is_copied = wallet in chosen
+            track = tracking.get(wallet)
+            live_positions = (track or {}).get("positions", {}) or {}
+            live_sym_count = len(live_positions)
+            scan_pos_count = int(result.get("open_positions_count", 0))
+            scan_symbols = list(result.get("open_symbols", []) or [])
+            pos_count = live_sym_count if is_copied and live_sym_count else scan_pos_count
+            preview_symbols = sorted(live_positions) if live_sym_count else scan_symbols
+            live_syms_preview = ", ".join(preview_symbols[:3])
+            if pos_count > 3:
+                live_syms_preview += f" +{pos_count - 3}"
+            last_poll = float((track or {}).get("last_poll_at", 0) or 0)
+            poll_age = time.time() - last_poll if last_poll else None
 
-    chosen = {t["wallet"] for t in trader_store.list_traders() if t["is_copied"]}
-    st.dataframe(
-        pd.DataFrame([{
-            "Status":        "🟢 kopiert" if r["wallet"] in chosen else "✅ verifiziert",
-            "Trader":        r["nick_name"] or _short(r["wallet"]),
-            "Score":         r["quality_score"],
-            "Tages-ROI":     r["day_roi"] / 100,
-            "Tages-PnL":     r["day_pnl"],
-            "7T-ROI":        (r["week_roi"] or 0) / 100,
-            "30T-ROI":       (r["month_roi"] or 0) / 100,
-            "Follower":      r["follower_count"],
-            "Positionen geteilt": "ja" if r["position_shared"] else "nein",
-            "Aktiv vor":     r["last_active_age"] / 3600,
-            "Leaderboard":   binance_leaderboard_url(r["wallet"]),
-        } for r in results]),
-        width="stretch", hide_index=True,
-        column_config={
-            "Score":         st.column_config.ProgressColumn(
-                format="%.1f", min_value=0.0, max_value=100.0),
-            "Tages-ROI":     st.column_config.NumberColumn(format="%+.1f%%"),
-            "Tages-PnL":     st.column_config.NumberColumn(format="$%+.0f"),
-            "7T-ROI":        st.column_config.NumberColumn(format="%+.1f%%"),
-            "30T-ROI":       st.column_config.NumberColumn(format="%+.1f%%"),
-            "Aktiv vor":     st.column_config.NumberColumn(format="%.1f h"),
-            "Leaderboard":   st.column_config.LinkColumn("🔗 Prüfen", display_text="Öffnen"),
-        },
-    )
+            if is_copied:
+                live_badge, live_sub = _tracking_badge(track, bot_alive)
+            else:
+                live_badge = '<span class="badge-info">◌ NICHT KOPIERT</span>'
+                live_sub = "kein Tracking"
 
-    st.markdown('<div class="section-header">➕ Trader übernehmen</div>',
-                unsafe_allow_html=True)
-    with st.form("adopt_form"):
-        a1, a2, a3 = st.columns([3, 1, 1])
-        choice = a1.selectbox("Trader", options=[r["wallet"] for r in results],
-                              format_func=lambda w: next(
-                                  (r["nick_name"] or _short(w) for r in results if r["wallet"] == w),
-                                  _short(w),
-                              ), label_visibility="collapsed")
-        amount = a2.number_input("Betrag $", min_value=1.0, value=_default_size(),
-                                 step=5.0, label_visibility="collapsed")
-        adopt = a3.form_submit_button("🚀 Kopieren", type="primary", width="stretch")
-    if adopt:
-        selected = next(result for result in results if result["wallet"] == choice)
-        trader_store.save_verification(choice, selected)
-        adapter.set_copy_size(choice, amount)
-        adapter.activate_wallet(choice)
-        adapter.set_focus_wallet(choice)
-        st.success(
-            f"{_short(choice)} wird jetzt mit ${amount:,.0f} pro Trade kopiert. "
-            f"Der Bot übernimmt ihn innerhalb weniger Sekunden — den Nachweis "
-            f"siehst du unter **👥 Meine Trader → 📡 Tracking**."
-        )
+            roi = result["day_roi"]
+            roi_cls = "profit" if roi >= 0 else "loss"
+            pnl = result["day_pnl"]
+            pnl_cls = "profit" if pnl >= 0 else "loss"
+            wr = float(result.get("win_rate") or 0)
+            name = result["nick_name"] or _short(wallet)
+            profile_url = (
+                f"https://www.binance.com/en/copy-trading/lead-details/"
+                f"{wallet}?timeRange=30D"
+            )
+            status_pill = (
+                '<span class="badge-profit">KOPIERT</span>' if is_copied
+                else '<span class="badge-info">BEREIT</span>'
+            )
+            pos_html = (
+                f'{pos_count} · <span style="color:#475569">{live_syms_preview}</span>'
+                if pos_count else '<span style="color:#94a3b8">keine offen</span>'
+            )
+            poll_html = _fmt_age(poll_age) if poll_age is not None else "—"
+
+            st.markdown(
+                f'''
+                <div class="scan-row">
+                  <div class="scan-row-main">
+                    <div class="scan-row-name">
+                      <span class="scan-name">{name}</span>
+                      <span class="scan-short">{_short(wallet)}</span>
+                      {status_pill}
+                    </div>
+                    <div class="scan-row-metrics">
+                      <span class="scan-metric"><em>ROI 1d</em><b class="{roi_cls}">{roi:+.1f}%</b></span>
+                      <span class="scan-metric"><em>PnL 1d</em><b class="{pnl_cls}">${pnl:+,.0f}</b></span>
+                      <span class="scan-metric"><em>WR</em><b>{wr:.0f}%</b></span>
+                      <span class="scan-metric"><em>Follower</em><b>{result["follower_count"]}</b></span>
+                      <span class="scan-metric"><em>Positionen</em><b>{pos_html}</b></span>
+                      <span class="scan-metric"><em>Poll</em><b>{poll_html}</b></span>
+                      <span class="scan-live">{live_badge}<em>{live_sub}</em></span>
+                    </div>
+                  </div>
+                </div>
+                ''',
+                unsafe_allow_html=True,
+            )
+
+            with st.expander("Details, Verifikation und Copy-Steuerung", expanded=False):
+                d1, d2, d3, d4 = st.columns(4)
+                d1.metric("7T ROI", f"{result['week_roi'] or 0:+.1f}%")
+                d2.metric("30T ROI", f"{result['month_roi'] or 0:+.1f}%")
+                d3.metric("Quality-Score", f"{result.get('quality_score', 0):.1f}")
+                d4.metric(
+                    "Positionen öffentlich",
+                    "ja" if result["position_shared"] else "nein",
+                )
+
+                if live_sym_count:
+                    live_rows = []
+                    for sym, pos in sorted(live_positions.items()):
+                        amt = pos.get("amount") or pos.get("qty") or 0
+                        entry = pos.get("entry_price") or pos.get("entry") or 0
+                        live_rows.append(
+                            f"<div class='scan-live-row'><b>{sym}</b>"
+                            f"<span>Menge {amt}</span><span>Entry {entry}</span></div>"
+                        )
+                    st.markdown(
+                        "<div class='scan-live-list'>"
+                        + "".join(live_rows) + "</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.caption("Aktuell keine offenen Positionen vom Backend gemeldet.")
+
+                links_html = " · ".join(
+                    f"<a href='{url}' target='_blank'>{label}</a>"
+                    for label, url in [
+                        ("Binance Profil", profile_url),
+                        *_verification_links(wallet),
+                    ]
+                )
+                st.markdown(
+                    f"<div class='scan-links'>🔗 {links_html}</div>",
+                    unsafe_allow_html=True,
+                )
+
+                c1, c2 = st.columns([1, 1])
+                amount = c1.number_input(
+                    "USDT / Trade",
+                    min_value=1.0,
+                    value=float(_default_size()),
+                    step=5.0,
+                    key=f"scan_amt_{wallet}",
+                )
+                action = "Decopy" if is_copied else "Copy übernehmen"
+                icon = "⛔" if is_copied else "✅"
+                if c2.button(
+                    f"{icon} {action}",
+                    key=f"scan_copy_{wallet}",
+                    width="stretch",
+                ):
+                    trader_store.save_verification(wallet, result)
+                    adapter.set_copy_size(wallet, amount)
+                    if is_copied:
+                        adapter.deactivate_wallet(wallet)
+                    else:
+                        adapter.activate_wallet(wallet)
+                        st.toast(
+                            f"Copy aktiv für {_short(wallet)} mit ${amount:,.0f}/Trade. "
+                            f"Bot repliziert offene Longs beim nächsten Poll (~5 s).",
+                            icon="✅",
+                        )
+                    st.rerun()
+
+    _live_scan_rows()
     st.caption(
         "Übernehmen setzt Betrag, aktiviert Copy-Trading und pinnt den Trader an. "
-        "Alles davon lässt sich pro Trader nachträglich ändern."
+        "Der Bot fährt beim nächsten Poll (~5 s) alle aktuell offenen Long-Positionen "
+        "des Traders mit deinem Betrag als Paper-Order nach. Danach folgt er live "
+        "jedem `OPEN` / `INCREASE ±5 %` / `CLOSE`."
+    )
+
+
+# ── 📜 Historie ──────────────────────────────────────────────────────────────
+
+def _render_history() -> None:
+    st.markdown('<div class="section-header">📜 Meine Trade-Historie</div>',
+                unsafe_allow_html=True)
+    history = _load_json(HISTORY_PATH, [])
+    history = history if isinstance(history, list) else []
+    history.sort(key=lambda row: row.get("closed_at", 0), reverse=True)
+
+    realized = sum(float(row.get("pnl_usdt", 0)) for row in history)
+    wins = sum(1 for row in history if float(row.get("pnl_usdt", 0)) > 0)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Geschlossene Trades", len(history))
+    c2.metric("Realisierter PnL", f"${realized:+,.2f}")
+    c3.metric("Win-Rate", f"{wins / len(history):.0%}" if history else "—")
+
+    if not history:
+        st.info("Noch keine abgeschlossenen Paper- oder Live-Trades.")
+        return
+
+    st.dataframe(
+        pd.DataFrame([{
+            "Zeit": _dt.datetime.fromtimestamp(row.get("closed_at", 0)).strftime(
+                "%d.%m.%Y %H:%M:%S"
+            ) if row.get("closed_at") else "—",
+            "Trader": _short(row.get("trader", "")) if row.get("trader") else "—",
+            "Symbol": row.get("symbol", ""),
+            "Einsatz": float(row.get("size_usdt", 0)),
+            "Entry": float(row.get("entry_price", 0)),
+            "Exit": float(row.get("exit_price", 0)),
+            "PnL $": float(row.get("pnl_usdt", 0)),
+            "PnL %": float(row.get("pnl_pct", 0)),
+            "Haltezeit": _fmt_hold(max(0.0, row.get("closed_at", 0) - row.get("opened_at", 0))),
+            "Grund": row.get("reason", ""),
+            "Modus": "Paper" if row.get("dry_run") else "Live",
+        } for row in history]),
+        width="stretch", hide_index=True,
+        column_config={
+            "Einsatz": st.column_config.NumberColumn(format="$%.2f"),
+            "Entry": st.column_config.NumberColumn(format="$%.4f"),
+            "Exit": st.column_config.NumberColumn(format="$%.4f"),
+            "PnL $": st.column_config.NumberColumn(format="$%+.2f"),
+            "PnL %": st.column_config.NumberColumn(format="%+.2f%%"),
+        },
     )
 
 
@@ -1090,7 +1319,7 @@ def _render_setup(adapter):
         st.success(
             f"Läuft (PID {bot.get('pid')}) · gestartet "
             f"{_fmt_age(time.time() - started) if started else '—'} · "
-            f"WebSocket {'verbunden' if bot.get('ws_connected') else 'getrennt'} · "
+            f"REST-Polling {'aktiv' if bot.get('ws_connected') else 'getrennt'} · "
             f"{bot.get('copied', 0)} Trader kopiert · "
             f"{bot.get('open_trades', 0)} eigene Position(en) · "
             f"API: {bot.get('api_health', '?')}"

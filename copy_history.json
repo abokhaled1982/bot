@@ -1,0 +1,50 @@
+[
+  {
+    "trader": "5191602405946164993",
+    "trader_short": "519160...4993",
+    "symbol": "ETHUSDT",
+    "coin": "ETH",
+    "entry_price": 2387.66,
+    "exit_price": 2388.12,
+    "size_usdt": 10.0,
+    "qty": 0.0041,
+    "pnl_usdt": -0.022073427539935225,
+    "pnl_pct": -0.22073427539935223,
+    "reason": "TIME_EXIT",
+    "opened_at": 1788378692.1829176,
+    "closed_at": 1788378992.2061932,
+    "dry_run": true
+  },
+  {
+    "trader": "5076852441659065088",
+    "trader_short": "507685...5088",
+    "symbol": "HEMIUSDT",
+    "coin": "HEMI",
+    "entry_price": 0.01396,
+    "exit_price": 0.01393,
+    "size_usdt": 10.0,
+    "qty": 716.3,
+    "pnl_usdt": -0.04548997134670538,
+    "pnl_pct": -0.4548997134670538,
+    "reason": "TIME_EXIT",
+    "opened_at": 1788378702.6322198,
+    "closed_at": 1788379003.2254164,
+    "dry_run": true
+  },
+  {
+    "trader": "5191602405946164993",
+    "trader_short": "519160...4993",
+    "symbol": "ETHUSDT",
+    "coin": "ETH",
+    "entry_price": 2411.39,
+    "exit_price": 2397.02,
+    "size_usdt": 10.0,
+    "qty": 0.0041,
+    "pnl_usdt": -0.08359218542002653,
+    "pnl_pct": -0.8359218542002653,
+    "reason": "TIME_EXIT",
+    "opened_at": 1788419446.5643592,
+    "closed_at": 1788433211.0114503,
+    "dry_run": true
+  }
+]
