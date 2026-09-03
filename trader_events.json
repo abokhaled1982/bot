@@ -100,7 +100,7 @@
     "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/4977091653804772096?tab=Positions",
     "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/4977091653804772096?tab=TradeHistory",
     "first_event_at": "2026-09-03 22:21:24 CEST",
-    "event_count": 1,
+    "event_count": 2,
     "events": [
       {
         "event_id": "4977091653804772096:SOL:1788466884666590956",
@@ -146,9 +146,50 @@
           "unrealized_pnl": 19.55137399,
           "updated_at": 1788466506.2409718
         }
+      },
+      {
+        "event_id": "4977091653804772096:SOL:1788470253240341783",
+        "trader_id": "4977091653804772096",
+        "trader_id_short": "497709...2096",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/4977091653804772096?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/4977091653804772096?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/4977091653804772096?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/SOLUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/SOLUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788470253.2403297,
+          "utc": "2026-09-03T21:17:33.240330+00:00",
+          "berlin": "2026-09-03 23:17:33 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": 219.703,
+        "action": "DECREASE_LONG",
+        "side": "LONG",
+        "coin": "SOL",
+        "symbol": "SOLUSDT",
+        "size": 8.83,
+        "size_change": -1.1899999999999995,
+        "value_usd": 913.954938448149,
+        "value_change_usd": -123.17173009663611,
+        "entry_price": 103.50565554339174,
+        "leverage": 10.0,
+        "pnl_pct": 1.6176357233873364,
+        "unrealized_pnl": 14.78446158,
+        "previous_position": {
+          "coin": "SOL",
+          "symbol": "SOLUSDT",
+          "size": 10.02,
+          "entry_px": 103.50565554339174,
+          "leverage": 10.0,
+          "pnl_pct": 1.36107474700333,
+          "value_usd": 1037.1266685447852,
+          "unrealized_pnl": 14.11606918,
+          "updated_at": 1788470033.53774
+        }
       }
     ],
-    "last_event_at": "2026-09-03 22:21:24 CEST",
+    "last_event_at": "2026-09-03 23:17:33 CEST",
     "last_action": "DECREASE_LONG",
     "last_symbol": "SOLUSDT"
   },
