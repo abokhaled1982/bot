@@ -53,12 +53,28 @@ _EVENT_ICON = {
 
 # ── Daten-Helpers ────────────────────────────────────────────────────────────
 
+# JSON-Cache mit mtime-Invalidierung: verhindert, dass Fragmente (3-5s Rerun)
+# positions.json / copy_history.json pro Trader-Zeile neu von Platte lesen.
+_JSON_CACHE: dict[str, tuple[float, int, object]] = {}
+_DERIVED_CACHE: dict[str, tuple[float, int, object]] = {}
+
+
 def _load_json(path: str, fallback):
     try:
+        stat = os.stat(path)
+    except OSError:
+        return fallback
+    key = (stat.st_mtime, stat.st_size)
+    cached = _JSON_CACHE.get(path)
+    if cached and (cached[0], cached[1]) == key:
+        return cached[2]
+    try:
         with open(path, encoding="utf-8") as file:
-            return json.load(file)
+            data = json.load(file)
     except (OSError, json.JSONDecodeError):
         return fallback
+    _JSON_CACHE[path] = (stat.st_mtime, stat.st_size, data)
+    return data
 
 
 def _copy_positions() -> dict:
@@ -67,26 +83,58 @@ def _copy_positions() -> dict:
     return {s: p for s, p in raw.items() if p.get("source") == "COPY"}
 
 
+def _positions_index() -> dict[str, dict]:
+    """{wallet_or_short: {symbol: pos}} — einmal berechnet, per mtime gecacht."""
+    try:
+        stat = os.stat("positions.json")
+        cache_key = (stat.st_mtime, stat.st_size)
+    except OSError:
+        cache_key = (0.0, 0)
+    cached = _DERIVED_CACHE.get("positions")
+    if cached and (cached[0], cached[1]) == cache_key:
+        return cached[2]  # type: ignore[return-value]
+    index: dict[str, dict] = {}
+    for sym, pos in _copy_positions().items():
+        full = pos.get("trader_full") or ""
+        owner = full or (pos.get("trader") or "")
+        if owner:
+            index.setdefault(owner, {})[sym] = pos
+    _DERIVED_CACHE["positions"] = (cache_key[0], cache_key[1], index)
+    return index
+
+
 def _positions_of(wallet: str, short: str) -> dict:
     """Eigene offene Positionen, die genau diesem Leaderboard-Trader zuzuordnen sind."""
-    return {
-        sym: p for sym, p in _copy_positions().items()
-        if p.get("trader_full") == wallet
-        or (not p.get("trader_full") and p.get("trader") == short)
-    }
+    index = _positions_index()
+    return index.get(wallet) or index.get(short) or {}
+
+
+def _history_index() -> dict[str, list[dict]]:
+    """{wallet_or_short: [history_rows sorted desc]} — mtime-gecacht."""
+    try:
+        stat = os.stat(HISTORY_PATH)
+        cache_key = (stat.st_mtime, stat.st_size)
+    except OSError:
+        cache_key = (0.0, 0)
+    cached = _DERIVED_CACHE.get("history")
+    if cached and (cached[0], cached[1]) == cache_key:
+        return cached[2]  # type: ignore[return-value]
+    rows = _load_json(HISTORY_PATH, [])
+    index: dict[str, list[dict]] = {}
+    if isinstance(rows, list):
+        for row in rows:
+            for k in (row.get("trader") or "", row.get("trader_short") or ""):
+                if k:
+                    index.setdefault(k, []).append(row)
+        for lst in index.values():
+            lst.sort(key=lambda h: h.get("closed_at", 0), reverse=True)
+    _DERIVED_CACHE["history"] = (cache_key[0], cache_key[1], index)
+    return index
 
 
 def _history_of(wallet: str, short: str) -> list[dict]:
-    rows = _load_json(HISTORY_PATH, [])
-    if not isinstance(rows, list):
-        return []
-    out = [
-        h for h in rows
-        if h.get("trader") == wallet
-        or (not h.get("trader") and h.get("trader_short") == short)
-    ]
-    out.sort(key=lambda h: h.get("closed_at", 0), reverse=True)
-    return out
+    index = _history_index()
+    return index.get(wallet) or index.get(short) or []
 
 
 def _request_close(symbols: list[str], reason: str) -> None:
@@ -1094,11 +1142,15 @@ def _render_scanner(adapter):
                     )
         return
 
+    st.session_state.setdefault("scan_sort", "Letzte erkannte Änderung")
     sort_by = st.selectbox(
         "Sortieren nach",
-        ["Quality-Score", "Tages-ROI", "Tages-PnL", "Follower",
-         "Letzte erkannte Änderung"],
+        ["Letzte erkannte Änderung", "Quality-Score", "Tages-ROI",
+         "Tages-PnL", "Follower"],
         key="scan_sort",
+        help="'Letzte erkannte Änderung' schiebt Trader, deren Position der "
+             "Bot gerade neu gesehen hat, ganz nach oben — ideal für den "
+             "End-to-End-Test.",
     )
     if sort_by != "Letzte erkannte Änderung":
         sort_key = {
@@ -1106,6 +1158,8 @@ def _render_scanner(adapter):
             "Tages-PnL": "day_pnl", "Follower": "follower_count",
         }[sort_by]
         results.sort(key=lambda r: r.get(sort_key, 0), reverse=True)
+
+    _render_scan_bulk_bar(adapter, results)
 
     st.markdown(
         f'<div class="badge-info">{len(results)} Treffer · '
@@ -1118,14 +1172,18 @@ def _render_scanner(adapter):
         bot_alive = _bot_state().get("alive", False)
         chosen = {t["wallet"] for t in trader_store.list_traders() if t["is_copied"]}
         tracking = trader_store.get_tracker_state()
+        last_actions = _latest_trader_actions()
         ordered_results = results
         if sort_by == "Letzte erkannte Änderung":
             ordered_results = sorted(
                 results,
-                key=lambda result: float(
-                    (tracking.get(result["wallet"]) or {}).get(
-                        "last_signal_at", 0
-                    ) or 0
+                key=lambda result: max(
+                    float(
+                        (tracking.get(result["wallet"]) or {}).get(
+                            "last_signal_at", 0
+                        ) or 0
+                    ),
+                    float((last_actions.get(result["wallet"]) or {}).get("ts", 0) or 0),
                 ),
                 reverse=True,
             )
@@ -1170,6 +1228,21 @@ def _render_scanner(adapter):
                 if pos_count else '<span style="color:#94a3b8">keine offen</span>'
             )
             poll_html = _fmt_age(poll_age) if poll_age is not None else "—"
+            action = last_actions.get(wallet)
+            if action:
+                act_ts = float(action.get("ts", 0) or 0)
+                act_age = _fmt_age(time.time() - act_ts) if act_ts else "—"
+                act_sym = action.get("symbol") or ""
+                act_msg = action.get("message") or action.get("kind") or ""
+                act_kind = action.get("kind") or ""
+                act_icon = _EVENT_ICON.get(act_kind, "•")
+                act_html = (
+                    f'<b>{act_icon} {act_sym}</b>'
+                    f'<span style="color:#475569;margin-left:4px">{act_msg[:38]}</span>'
+                    f' · {act_age}'
+                )
+            else:
+                act_html = '<span style="color:#94a3b8">noch keine erkannt</span>'
 
             st.markdown(
                 f'''
@@ -1186,6 +1259,7 @@ def _render_scanner(adapter):
                       <span class="scan-metric"><em>WR</em><b>{wr:.0f}%</b></span>
                       <span class="scan-metric"><em>Follower</em><b>{result["follower_count"]}</b></span>
                       <span class="scan-metric"><em>Positionen</em><b>{pos_html}</b></span>
+                      <span class="scan-metric"><em>Letzte Aktion</em><b>{act_html}</b></span>
                       <span class="scan-metric"><em>Poll</em><b>{poll_html}</b></span>
                       <span class="scan-live">{live_badge}<em>{live_sub}</em></span>
                     </div>
@@ -1268,6 +1342,65 @@ def _render_scanner(adapter):
         "Der Bot fährt beim nächsten Poll (~5 s) alle aktuell offenen Long-Positionen "
         "des Traders mit deinem Betrag als Paper-Order nach. Danach folgt er live "
         "jedem `OPEN` / `INCREASE ±5 %` / `CLOSE`."
+    )
+
+
+def _latest_trader_actions() -> dict[str, dict]:
+    """Pro Wallet das jüngste Pipeline-Event, das eine Trader-Aktion darstellt.
+
+    Genutzt für die Scanner-Spalte 'Letzte Aktion' und zum Sortieren nach
+    tatsächlich beobachtetem Trade-Zeitpunkt (nicht nur `last_signal_at`).
+    """
+    events = trader_store.recent_events(limit=150)
+    relevant = {"SIGNAL", "BUY", "SELL", "SIMULATION"}
+    latest: dict[str, dict] = {}
+    for event in events:
+        wallet = event.get("wallet") or ""
+        if not wallet or event.get("kind") not in relevant:
+            continue
+        if wallet in latest:
+            continue
+        latest[wallet] = event
+    return latest
+
+
+def _render_scan_bulk_bar(adapter, results: list[dict]) -> None:
+    """Ein-Klick-Abo für alle gefundenen Trader zum End-to-End-Test."""
+    if not results:
+        return
+    chosen = {t["wallet"] for t in trader_store.list_traders() if t["is_copied"]}
+    not_yet = [r for r in results if r["wallet"] not in chosen]
+    already = len(results) - len(not_yet)
+
+    col_amount, col_button, col_info = st.columns([1, 2, 3])
+    bulk_amount = col_amount.number_input(
+        "USDT / Trade", min_value=1.0, value=float(_default_size()),
+        step=5.0, key="scan_bulk_amount",
+        help="Wird für alle Trader gesetzt, die noch nicht kopiert werden.",
+    )
+    label = (
+        f"🚀 Alle {len(not_yet)} verifizierten Trader abonnieren"
+        if not_yet else "✅ Alle verifizierten Trader sind bereits abonniert"
+    )
+    if col_button.button(
+        label, key="scan_bulk_subscribe", type="primary",
+        width="stretch", disabled=not not_yet,
+    ):
+        for result in not_yet:
+            wallet = result["wallet"]
+            trader_store.save_verification(wallet, result)
+            adapter.set_copy_size(wallet, float(bulk_amount))
+            adapter.activate_wallet(wallet)
+        st.toast(
+            f"{len(not_yet)} Trader abonniert · ${bulk_amount:,.0f}/Trade. "
+            "Der Bot repliziert die Longs beim nächsten Poll (~5 s).",
+            icon="🚀",
+        )
+        st.rerun()
+    col_info.caption(
+        f"{len(results)} verifiziert · {already} bereits kopiert · "
+        f"{len(not_yet)} bereit. Nach dem Klick sortiert der Scanner nach "
+        "'Letzte erkannte Änderung' — Trader mit frischem Trade stehen oben."
     )
 
 
