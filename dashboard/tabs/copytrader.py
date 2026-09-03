@@ -1096,14 +1096,16 @@ def _render_scanner(adapter):
 
     sort_by = st.selectbox(
         "Sortieren nach",
-        ["Quality-Score", "Tages-ROI", "Tages-PnL", "Follower"],
+        ["Quality-Score", "Tages-ROI", "Tages-PnL", "Follower",
+         "Letzte erkannte Änderung"],
         key="scan_sort",
     )
-    sort_key = {
-        "Quality-Score": "quality_score", "Tages-ROI": "day_roi",
-        "Tages-PnL": "day_pnl", "Follower": "follower_count",
-    }[sort_by]
-    results.sort(key=lambda r: r.get(sort_key, 0), reverse=True)
+    if sort_by != "Letzte erkannte Änderung":
+        sort_key = {
+            "Quality-Score": "quality_score", "Tages-ROI": "day_roi",
+            "Tages-PnL": "day_pnl", "Follower": "follower_count",
+        }[sort_by]
+        results.sort(key=lambda r: r.get(sort_key, 0), reverse=True)
 
     st.markdown(
         f'<div class="badge-info">{len(results)} Treffer · '
@@ -1116,7 +1118,18 @@ def _render_scanner(adapter):
         bot_alive = _bot_state().get("alive", False)
         chosen = {t["wallet"] for t in trader_store.list_traders() if t["is_copied"]}
         tracking = trader_store.get_tracker_state()
-        for result in results:
+        ordered_results = results
+        if sort_by == "Letzte erkannte Änderung":
+            ordered_results = sorted(
+                results,
+                key=lambda result: float(
+                    (tracking.get(result["wallet"]) or {}).get(
+                        "last_signal_at", 0
+                    ) or 0
+                ),
+                reverse=True,
+            )
+        for result in ordered_results:
             wallet = result["wallet"]
             is_copied = wallet in chosen
             track = tracking.get(wallet)
