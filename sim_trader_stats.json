@@ -1,1 +1,13 @@
-[]
+[
+  {
+    "trader_id": "5146066001912347648",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5146066001912347648?timeRange=30D",
+    "trades": 1,
+    "wins": 0,
+    "losses": 1,
+    "pnl_usdt": -0.0282,
+    "pnl_eur": -0.0259,
+    "win_rate": 0.0,
+    "verdict": "HURTFUL"
+  }
+]

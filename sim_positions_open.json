@@ -70,17 +70,17 @@
     "opened_at_iso": "2026-09-04T14:53:39+02:00"
   },
   {
-    "trader_id": "5146066001912347648",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5146066001912347648?timeRange=30D",
-    "trader_win_rate": 85.1852,
-    "coin": "ADA",
-    "symbol": "ADAUSDT",
+    "trader_id": "5186894299357091329",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5186894299357091329?timeRange=30D",
+    "trader_win_rate": 80.0,
+    "coin": "ETH",
+    "symbol": "ETHUSDT",
     "side": "LONG",
     "size_usdt": 10.0,
-    "entry_price": 0.213,
-    "entry_price_trader": 0.21330000000000002,
-    "qty": 46.948356807511736,
-    "opened_at": 1788535315.885472,
-    "opened_at_iso": "2026-09-04T17:21:55+02:00"
+    "entry_price": 2443.4,
+    "entry_price_trader": 2445.15,
+    "qty": 0.004092657771957109,
+    "opened_at": 1788544366.183565,
+    "opened_at_iso": "2026-09-04T19:52:46+02:00"
   }
 ]
