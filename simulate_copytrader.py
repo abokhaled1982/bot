@@ -68,6 +68,7 @@ DEFAULT_SIZE_USDT      = 10.0
 DEFAULT_MIN_WIN_RATE   = 80.0
 DEFAULT_USDT_EUR       = 0.92
 DEFAULT_STATUS_EVERY   = 30.0
+DEFAULT_MIN_COPY_USD   = 50.0
 
 BINANCE_SPOT_PRICE_URL = "https://api.binance.com/api/v3/ticker/price"
 LEADERBOARD_URL_FMT = (
@@ -429,6 +430,7 @@ async def run(args: argparse.Namespace) -> None:
 
     adapter = BinanceLeaderboardTrader(publish_state=False)
     adapter.set_poll_interval(args.poll_interval)
+    adapter.set_min_copy_size(args.min_copy_size_usd)
     _apply_traders_to_adapter(adapter, traders)
 
     adapter_task = asyncio.create_task(adapter.start())
@@ -464,6 +466,9 @@ def _parse_args() -> argparse.Namespace:
                    help="Intervall fuer erneutes Lesen von traders_export.json")
     p.add_argument("--size-usdt",       type=float, default=DEFAULT_SIZE_USDT)
     p.add_argument("--min-win-rate",    type=float, default=DEFAULT_MIN_WIN_RATE)
+    p.add_argument("--min-copy-size-usd", type=float, default=DEFAULT_MIN_COPY_USD,
+                   help="Mindest-Nominalwert (USD) einer Trader-Position, damit "
+                        "COPY_OPEN_LONG emittiert wird. Adapter-Default ist $1000.")
     p.add_argument("--usdt-eur-rate",   type=float, default=DEFAULT_USDT_EUR)
     p.add_argument("--show-status",     action="store_true")
     p.add_argument("--status-interval", type=float, default=DEFAULT_STATUS_EVERY)
@@ -480,6 +485,7 @@ def main() -> int:
     logger.info(
         f"[SIM] Start | cwd={os.getcwd()} "
         f"size={args.size_usdt} USDT minWR={args.min_win_rate}% "
+        f"minCopy=${args.min_copy_size_usd:.0f} "
         f"poll={args.poll_interval}s reload={args.traders_reload}s "
         f"(1 USDT ≈ {args.usdt_eur_rate:.2f} EUR)"
     )
