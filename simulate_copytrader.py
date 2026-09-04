@@ -56,10 +56,10 @@ from src.adapters.binance_leaderboard import (  # noqa: E402
 )
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-DEFAULT_TRADERS_FILE   = "traders_export.json"
-DEFAULT_OPEN_FILE      = "sim_positions_open.json"
-DEFAULT_CLOSED_FILE    = "sim_positions_closed.json"
-DEFAULT_STATS_FILE     = "sim_trader_stats.json"
+DEFAULT_TRADERS_FILE   = "data/traders_export.json"
+DEFAULT_OPEN_FILE      = "data/sim_positions_open.json"
+DEFAULT_CLOSED_FILE    = "data/sim_positions_closed.json"
+DEFAULT_STATS_FILE     = "data/sim_trader_stats.json"
 _LEGACY_OPEN_FILE      = "sim_positions.json"
 _LEGACY_CLOSED_FILE    = "sim_history.json"
 DEFAULT_POLL           = 5.0
@@ -394,6 +394,12 @@ async def _status_loop(state: dict, interval: float) -> None:
 
 
 async def run(args: argparse.Namespace) -> None:
+    # Zielordner der Ausgabedateien anlegen, falls noch nicht vorhanden.
+    for path in (args.open_file, args.closed_file, args.stats_file):
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
     state: dict[str, Any] = {
         "positions": _load_with_fallback(args.open_file, _LEGACY_OPEN_FILE, []),
         "history":   _load_with_fallback(args.closed_file, _LEGACY_CLOSED_FILE, []),
@@ -486,7 +492,7 @@ def main() -> int:
         logger.error(
             f"[SIM] traders_export.json nicht gefunden unter "
             f"{os.path.abspath(args.traders_file)} — bitte zuerst "
-            f"find_traders.py --append-to ausfuehren."
+            f"utils/find_traders.py --append-to ausfuehren."
         )
         return 2
 
