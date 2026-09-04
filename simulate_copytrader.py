@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
 """
-simulate_copytrader.py — Standalone Copy-Trade Simulator (ohne Dashboard).
+simulate_copytrader.py — Paper-Copy-Trader auf Basis des Live-Signal-Adapters.
 
-Liest `traders_export.json` bei jedem Poll neu ein und spiegelt LONG-Positionen
-der markierten Trader als Paper-Trades wider. Preise kommen live vom
-Binance-Spot-REST-API. Es werden KEINE echten Orders platziert.
+Verwendet denselben `BinanceLeaderboardTrader` wie `monitor_traders.py` und
+reagiert auf dessen Copy-Signale:
 
-Auswahl-Logik pro Trader-Eintrag in `traders_export.json`:
-  aktiv  ⇔  is_copied == 1  UND  win_rate >= --min-win-rate
+  COPY_OPEN_LONG  → oeffnet Paper-Position auf Binance-Spot-Preis
+  COPY_CLOSE_LONG → schliesst zugehoerige Paper-Position
+  (INCREASE / DECREASE / *_SHORT werden ignoriert)
 
-Wird ein Trader aus der JSON entfernt oder `is_copied` auf 0 gesetzt,
-werden alle seine offenen Simulations-Positionen im nächsten Tick zum
-aktuellen Spot-Preis geschlossen (Grund `TRADER_UNTRACKED`).
+Trader-Auswahl kommt aus `traders_export.json` (`is_copied == 1` UND
+`win_rate >= --min-win-rate`). Die Datei wird periodisch neu eingelesen;
+neu hinzukommende Trader werden zusaetzlich beobachtet, entfernte Trader
+werden aus der Signalliste genommen und ihre offenen Sim-Positionen zum
+aktuellen Spot-Preis geschlossen (`TRADER_UNTRACKED`).
 
 Ausgaben:
-  sim_positions_open.json    — aktuell offene Paper-Positionen
-  sim_positions_closed.json  — geschlossene Paper-Trades (Historie mit PnL USDT+EUR)
-  sim_trader_stats.json      — Status pro Trader: Trades, Winrate, Gesamt-PnL, Verdict
-  sim_trader_baselines.json  — pro Trader die zuletzt gesehenen offenen Coins.
-                               Nur Coins, die nach der ersten Sichtung neu
-                               dazukommen, loesen einen Sim-Open aus. Bereits
-                               offene Positionen des Traders werden ignoriert.
+  sim_positions_open.json    — offene Paper-Positionen
+  sim_positions_closed.json  — geschlossene Paper-Trades (PnL USDT+EUR)
+  sim_trader_stats.json      — Trades, Winrate, Gesamt-PnL, Verdict pro Trader
 
 Alte Dateinamen (`sim_positions.json`, `sim_history.json`) werden beim Start
-automatisch übernommen, wenn die neuen noch nicht existieren.
+einmalig migriert. Es werden KEINE echten Orders platziert.
 
 Start:
   python3 simulate_copytrader.py
@@ -32,9 +30,9 @@ Start:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
-import signal
 import sys
 import time
 from datetime import datetime, timezone
@@ -43,14 +41,18 @@ from typing import Any
 import requests
 from loguru import logger
 
-# Repo-Root in sys.path, damit `src.*` gefunden wird, egal von wo aufgerufen.
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+# Adapter-Defaults setzen, bevor das Modul geladen wird.
+os.environ.setdefault("BNLB_AUTO_DISCOVER", "False")
+os.environ.setdefault("BNLB_EMIT_AUTO_SIGNALS", "True")
+os.environ["DRY_RUN"] = "True"
+
 from src.adapters.binance_leaderboard import (  # noqa: E402
-    fetch_other_positions,
-    futures_symbol_to_spot_symbol,
+    BinanceLeaderboardTrader,
+    CopySignal,
 )
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -58,13 +60,14 @@ DEFAULT_TRADERS_FILE   = "traders_export.json"
 DEFAULT_OPEN_FILE      = "sim_positions_open.json"
 DEFAULT_CLOSED_FILE    = "sim_positions_closed.json"
 DEFAULT_STATS_FILE     = "sim_trader_stats.json"
-DEFAULT_BASELINE_FILE  = "sim_trader_baselines.json"
 _LEGACY_OPEN_FILE      = "sim_positions.json"
 _LEGACY_CLOSED_FILE    = "sim_history.json"
 DEFAULT_POLL           = 5.0
+DEFAULT_TRADERS_RELOAD = 15.0
 DEFAULT_SIZE_USDT      = 10.0
 DEFAULT_MIN_WIN_RATE   = 80.0
 DEFAULT_USDT_EUR       = 0.92
+DEFAULT_STATUS_EVERY   = 30.0
 
 BINANCE_SPOT_PRICE_URL = "https://api.binance.com/api/v3/ticker/price"
 LEADERBOARD_URL_FMT = (
@@ -73,7 +76,7 @@ LEADERBOARD_URL_FMT = (
 MAX_HISTORY = 1000
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── I/O-Helpers ───────────────────────────────────────────────────────────────
 def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -97,11 +100,10 @@ def _save_json(path: str, data: Any) -> None:
 
 
 def _load_with_fallback(new_path: str, legacy_path: str, default: Any) -> Any:
-    """Neue Datei bevorzugen; sonst altes Format \u00fcbernehmen (einmalige Migration)."""
     if os.path.exists(new_path):
         return _load_json(new_path, default)
     if os.path.exists(legacy_path):
-        logger.info(f"[SIM] Migriere {legacy_path} \u2192 {new_path}")
+        logger.info(f"[SIM] Migriere {legacy_path} → {new_path}")
         data = _load_json(legacy_path, default)
         try:
             _save_json(new_path, data)
@@ -111,7 +113,7 @@ def _load_with_fallback(new_path: str, legacy_path: str, default: Any) -> Any:
     return default
 
 
-# Symbole ohne Spot-Paar nur einmal loggen, sonst \u00fcberschwemmt es die Ausgabe.
+# Fehlende Spot-Paare nur einmal loggen.
 _MISSING_SPOT_LOGGED: set[str] = set()
 
 
@@ -124,17 +126,21 @@ def _spot_price(symbol: str) -> float | None:
         if symbol not in _MISSING_SPOT_LOGGED:
             _MISSING_SPOT_LOGGED.add(symbol)
             logger.warning(
-                f"[SIM] {symbol}: kein Spot-Preis ({e}) \u2014 wahrscheinlich "
+                f"[SIM] {symbol}: kein Spot-Preis ({e}) — vermutlich "
                 f"Futures-only, wird bis Neustart uebersprungen"
             )
         return None
 
 
-def _trader_url(row: dict, uid: str) -> str:
-    return str(row.get("trader_profile_url") or LEADERBOARD_URL_FMT.format(uid=uid))
+def _trader_url(row: dict | None, uid: str) -> str:
+    if row:
+        url = row.get("trader_profile_url")
+        if url:
+            return str(url)
+    return LEADERBOARD_URL_FMT.format(uid=uid)
 
 
-def _load_traders(path: str, min_win_rate: float) -> dict[str, dict]:
+def _load_active_traders(path: str, min_win_rate: float) -> dict[str, dict]:
     """UID → Trader-Row, gefiltert auf is_copied==1 UND win_rate>=min_win_rate."""
     data = _load_json(path, {"traders": []})
     out: dict[str, dict] = {}
@@ -158,54 +164,28 @@ def _load_traders(path: str, min_win_rate: float) -> dict[str, dict]:
     return out
 
 
-def _parse_open_longs(rows: list[dict]) -> dict[str, dict]:
-    """Public-Position-Rows → coin → {symbol, entry_px_trader}. Nur LONG (>0)."""
-    out: dict[str, dict] = {}
-    for row in rows:
-        raw_symbol = str(row.get("symbol") or "").upper()
-        if not raw_symbol:
-            continue
-        spot_symbol = futures_symbol_to_spot_symbol(raw_symbol)
-        coin = spot_symbol.replace("USDT", "")
-        try:
-            amount = float(row.get("amount", row.get("positionAmount", 0)) or 0)
-        except (TypeError, ValueError):
-            amount = 0.0
-        side = str(row.get("positionSide") or "").upper()
-        if side == "SHORT" and amount > 0:
-            amount = -amount
-        elif side == "LONG" and amount < 0:
-            amount = -amount
-        if amount <= 0:
-            continue  # short/flat → auf Spot nicht abbildbar
-        try:
-            entry_trader = float(row.get("entryPrice", 0) or 0)
-        except (TypeError, ValueError):
-            entry_trader = 0.0
-        out[coin] = {"symbol": spot_symbol, "entry_px_trader": entry_trader}
-    return out
-
-
+# ── Trade-Buchhaltung (reine Funktionen) ──────────────────────────────────────
 def _open_position(
-    positions: list[dict], uid: str, trader_row: dict, coin: str, symbol: str,
-    entry_price: float, entry_trader: float, size_usdt: float,
+    open_positions: list[dict], uid: str, trader_row: dict | None,
+    coin: str, symbol: str, entry_price: float, entry_trader: float,
+    size_usdt: float,
 ) -> dict:
     qty = size_usdt / entry_price if entry_price > 0 else 0.0
     pos = {
-        "trader_id":        uid,
-        "trader_url":       _trader_url(trader_row, uid),
-        "trader_win_rate":  float(trader_row.get("win_rate") or 0.0),
-        "coin":             coin,
-        "symbol":           symbol,
-        "side":             "LONG",
-        "size_usdt":        size_usdt,
-        "entry_price":      entry_price,
+        "trader_id":          uid,
+        "trader_url":         _trader_url(trader_row, uid),
+        "trader_win_rate":    float((trader_row or {}).get("win_rate") or 0.0),
+        "coin":               coin,
+        "symbol":             symbol,
+        "side":               "LONG",
+        "size_usdt":          size_usdt,
+        "entry_price":        entry_price,
         "entry_price_trader": entry_trader,
-        "qty":              qty,
-        "opened_at":        time.time(),
-        "opened_at_iso":    _now_iso(),
+        "qty":                qty,
+        "opened_at":          time.time(),
+        "opened_at_iso":      _now_iso(),
     }
-    positions.append(pos)
+    open_positions.append(pos)
     return pos
 
 
@@ -246,7 +226,7 @@ def _rebuild_stats(history: list[dict]) -> list[dict]:
         elif pnl < 0:
             s["losses"] += 1
         s["pnl_usdt"] = round(s["pnl_usdt"] + pnl, 4)
-        s["pnl_eur"]  = round(s["pnl_eur"]  + float(h.get("pnl_eur") or 0.0), 4)
+        s["pnl_eur"]  = round(s["pnl_eur"] + float(h.get("pnl_eur") or 0.0), 4)
     for s in agg.values():
         s["win_rate"] = (
             round(100.0 * s["wins"] / s["trades"], 2) if s["trades"] else 0.0
@@ -256,11 +236,9 @@ def _rebuild_stats(history: list[dict]) -> list[dict]:
             else "HURTFUL" if s["pnl_usdt"] < 0
             else "NEUTRAL"
         )
-    # sortiert nach Gesamt-PnL absteigend — beste Trader oben
     return sorted(agg.values(), key=lambda x: x["pnl_usdt"], reverse=True)
 
 
-# ── Kern-Tick ─────────────────────────────────────────────────────────────────
 def _persist_open(args: argparse.Namespace, open_positions: list[dict]) -> None:
     _save_json(args.open_file, open_positions)
 
@@ -270,167 +248,224 @@ def _persist_closed(args: argparse.Namespace, history: list[dict]) -> None:
     _save_json(args.stats_file, _rebuild_stats(history))
 
 
-def _persist_baselines(args: argparse.Namespace, baselines: dict[str, list[str]]) -> None:
-    # sortiert speichern, damit Diffs im Git ruhig bleiben
-    _save_json(args.baseline_file, {uid: sorted(v) for uid, v in baselines.items()})
-
-
-def _load_baselines(path: str) -> dict[str, set[str]]:
-    raw = _load_json(path, {})
-    if not isinstance(raw, dict):
-        return {}
-    return {str(uid): set(v or []) for uid, v in raw.items() if isinstance(v, list)}
-
-
-def _tick(state: dict, args: argparse.Namespace) -> None:
-    traders = _load_traders(args.traders_file, args.min_win_rate)
-    open_positions: list[dict] = state["positions"]
-    history: list[dict] = state["history"]
-    baselines: dict[str, set[str]] = state["baselines"]
-    opened = closed_cnt = trader_actions = 0
-    logger.info(
-        f"[SIM] Tick start | {len(traders)} aktive Trader | "
-        f"{len(open_positions)} Sim-Positionen aktuell offen"
+# ── Signal-Verarbeitung ───────────────────────────────────────────────────────
+def _handle_open(
+    sig: CopySignal, traders: dict[str, dict],
+    open_positions: list[dict], args: argparse.Namespace,
+) -> bool:
+    if any(p["trader_id"] == sig.trader and p["coin"] == sig.coin
+           for p in open_positions):
+        return False
+    price = _spot_price(sig.symbol)
+    if price is None or price <= 0:
+        return False
+    row = traders.get(sig.trader)
+    _open_position(
+        open_positions, sig.trader, row, sig.coin, sig.symbol,
+        price, float(sig.entry_price or 0.0), args.size_usdt,
     )
+    wr = float((row or {}).get("win_rate") or 0.0)
+    logger.info(
+        f"[SIM] 📈 OPEN LONG {sig.coin} | Trader {sig.trader} "
+        f"(winrate {wr:.1f}%) | entry ${price:.6f} | ${args.size_usdt:.2f} USDT"
+    )
+    return True
 
-    # 1) Positionen von deaktivierten/entfernten Tradern schließen
-    active_uids = set(traders.keys())
+
+def _handle_close(
+    sig: CopySignal, open_positions: list[dict], history: list[dict],
+    args: argparse.Namespace, reason: str = "TRADER_CLOSED",
+) -> bool:
+    match = next(
+        (p for p in open_positions
+         if p["trader_id"] == sig.trader and p["coin"] == sig.coin),
+        None,
+    )
+    if match is None:
+        return False
+    price = _spot_price(match["symbol"])
+    if price is None or price <= 0:
+        return False
+    closed = _close_position(match, price, reason, args.usdt_eur_rate)
+    history.append(closed)
+    open_positions.remove(match)
+    logger.info(
+        f"[SIM] 🔴 CLOSE LONG {closed['coin']} | Trader {closed['trader_id']} "
+        f"| exit ${price:.6f} | PnL {closed['pnl_usdt']:+.2f} USDT "
+        f"({closed['pnl_eur']:+.2f} EUR) | {reason}"
+    )
+    return True
+
+
+def _close_untracked(
+    active_uids: set[str], open_positions: list[dict], history: list[dict],
+    args: argparse.Namespace,
+) -> int:
+    closed = 0
     for pos in list(open_positions):
         if pos["trader_id"] in active_uids:
             continue
         price = _spot_price(pos["symbol"])
         if price is None:
-            logger.warning(
-                f"[SIM] kein Preis für {pos['symbol']} — halte "
-                f"Position von {pos['trader_id']} offen"
-            )
             continue
-        closed = _close_position(pos, price, "TRADER_UNTRACKED", args.usdt_eur_rate)
-        history.append(closed)
+        rec = _close_position(pos, price, "TRADER_UNTRACKED", args.usdt_eur_rate)
+        history.append(rec)
         open_positions.remove(pos)
-        closed_cnt += 1
-        _persist_open(args, open_positions)
-        _persist_closed(args, history)
+        closed += 1
         logger.warning(
-            f"[SIM] CLOSE {closed['coin']} | Trader {closed['trader_id']} inaktiv "
-            f"| exit ${price:.6f} | PnL {closed['pnl_usdt']:+.2f} USDT "
-            f"({closed['pnl_eur']:+.2f} EUR)"
+            f"[SIM] CLOSE {rec['coin']} | Trader {rec['trader_id']} inaktiv "
+            f"| exit ${price:.6f} | PnL {rec['pnl_usdt']:+.2f} USDT "
+            f"({rec['pnl_eur']:+.2f} EUR)"
+        )
+    return closed
+
+
+def _apply_traders_to_adapter(
+    adapter: BinanceLeaderboardTrader, traders: dict[str, dict],
+) -> None:
+    adapter._auto_uids = list(traders.keys())
+    adapter._rebuild_uid_list()
+
+
+# ── Async-Runner ──────────────────────────────────────────────────────────────
+async def _traders_reload_loop(
+    adapter: BinanceLeaderboardTrader, state: dict, args: argparse.Namespace,
+) -> None:
+    while True:
+        await asyncio.sleep(args.traders_reload)
+        try:
+            traders = await asyncio.to_thread(
+                _load_active_traders, args.traders_file, args.min_win_rate,
+            )
+        except Exception as e:
+            logger.error(f"[SIM] traders_export.json Reload-Fehler: {e}")
+            continue
+        prev = set(state["traders"].keys())
+        curr = set(traders.keys())
+        added = curr - prev
+        dropped = prev - curr
+        state["traders"] = traders
+        _apply_traders_to_adapter(adapter, traders)
+        if added or dropped:
+            logger.info(
+                f"[SIM] Trader-Liste aktualisiert | +{len(added)} / -{len(dropped)} "
+                f"| aktiv: {len(traders)}"
+            )
+        if dropped:
+            closed = await asyncio.to_thread(
+                _close_untracked, curr, state["positions"],
+                state["history"], args,
+            )
+            if closed:
+                _persist_open(args, state["positions"])
+                _persist_closed(args, state["history"])
+
+
+async def _signal_loop(
+    adapter: BinanceLeaderboardTrader, state: dict, args: argparse.Namespace,
+) -> None:
+    while True:
+        sig: CopySignal = await adapter.signal_queue.get()
+        if sig.trader not in state["traders"]:
+            continue
+        changed = False
+        if sig.signal == "COPY_OPEN_LONG":
+            changed = await asyncio.to_thread(
+                _handle_open, sig, state["traders"], state["positions"], args,
+            )
+        elif sig.signal == "COPY_CLOSE_LONG":
+            changed = await asyncio.to_thread(
+                _handle_close, sig, state["positions"], state["history"], args,
+            )
+        if changed:
+            _persist_open(args, state["positions"])
+            if state["history"]:
+                _persist_closed(args, state["history"])
+
+
+async def _status_loop(state: dict, interval: float) -> None:
+    while True:
+        logger.info(
+            f"[SIM] Status | offen: {len(state['positions'])} | "
+            f"Historie: {len(state['history'])} | aktive Trader: "
+            f"{len(state['traders'])}"
+        )
+        await asyncio.sleep(interval)
+
+
+async def run(args: argparse.Namespace) -> None:
+    state: dict[str, Any] = {
+        "positions": _load_with_fallback(args.open_file, _LEGACY_OPEN_FILE, []),
+        "history":   _load_with_fallback(args.closed_file, _LEGACY_CLOSED_FILE, []),
+        "traders":   {},
+    }
+
+    if not os.path.exists(args.open_file):
+        _save_json(args.open_file, state["positions"])
+    if not os.path.exists(args.closed_file):
+        _save_json(args.closed_file, state["history"])
+    if not os.path.exists(args.stats_file) or state["history"]:
+        _save_json(args.stats_file, _rebuild_stats(state["history"]))
+
+    traders = _load_active_traders(args.traders_file, args.min_win_rate)
+    state["traders"] = traders
+    logger.info(
+        f"[SIM] Geladen: {len(state['positions'])} offene Positionen, "
+        f"{len(state['history'])} Trade-Historie, "
+        f"{len(traders)} aktive Trader "
+        f"(is_copied=1 & win_rate >= {args.min_win_rate}%)"
+    )
+    if not traders:
+        logger.warning(
+            "[SIM] Keine aktiven Trader — pruefe is_copied=1 und win_rate "
+            "in traders_export.json oder senke --min-win-rate."
         )
 
-    # Baseline für nicht mehr aktive Trader verwerfen — bei Reaktivierung wird
-    # der aktuelle Positionsstand erneut als Snapshot behandelt.
-    baseline_dirty = False
-    for uid in list(baselines.keys()):
-        if uid not in active_uids:
-            baselines.pop(uid, None)
-            baseline_dirty = True
+    adapter = BinanceLeaderboardTrader(publish_state=False)
+    adapter.set_poll_interval(args.poll_interval)
+    _apply_traders_to_adapter(adapter, traders)
 
-    # 2) Diff pro aktivem Trader
-    for uid, row in traders.items():
-        try:
-            rows = fetch_other_positions(uid)
-        except Exception as e:
-            logger.error(f"[SIM] fetch {uid}: {e}")
-            continue
-        trader_longs = _parse_open_longs(rows)
-        trader_actions += len(trader_longs)
-        ours = {p["coin"]: p for p in open_positions if p["trader_id"] == uid}
-        current_coins = set(trader_longs.keys())
-
-        # Erster Kontakt mit diesem Trader → nur Snapshot, keine OPENs.
-        if uid not in baselines:
-            baselines[uid] = current_coins | set(ours.keys())
-            baseline_dirty = True
-            logger.info(
-                f"[SIM] 📸 Baseline für Trader {uid} gesetzt "
-                f"({len(current_coins)} bestehende Positionen ignoriert)"
-            )
-
-        prev_coins = baselines[uid]
-
-        # a) Coin nicht mehr in Trader-Positionen → schließen
-        for coin, pos in list(ours.items()):
-            if coin in trader_longs:
-                continue
-            price = _spot_price(pos["symbol"])
-            if price is None:
-                continue
-            closed = _close_position(pos, price, "TRADER_CLOSED", args.usdt_eur_rate)
-            history.append(closed)
-            open_positions.remove(pos)
-            closed_cnt += 1
-            _persist_open(args, open_positions)
-            _persist_closed(args, history)
-            logger.info(
-                f"[SIM] 🔴 CLOSE LONG {coin} | Trader {uid} closed "
-                f"| exit ${price:.6f} | PnL {closed['pnl_usdt']:+.2f} USDT "
-                f"({closed['pnl_eur']:+.2f} EUR)"
-            )
-
-        # b) Neuer Coin beim Trader → öffnen (nur wenn nicht in Baseline)
-        for coin, info in trader_longs.items():
-            if coin in ours:
-                continue
-            if coin in prev_coins:
-                # Bereits beim Snapshot / letzten Poll offen — keine neue Aktion.
-                continue
-            symbol = info["symbol"]
-            price = _spot_price(symbol)
-            if price is None or price <= 0:
-                continue
-            _open_position(
-                open_positions, uid, row, coin, symbol,
-                price, info["entry_px_trader"], args.size_usdt,
-            )
-            opened += 1
-            _persist_open(args, open_positions)
-            logger.info(
-                f"[SIM] 📈 OPEN LONG {coin} | Trader {uid} "
-                f"(winrate {row.get('win_rate', 0):.1f}%) "
-                f"| entry ${price:.6f} | ${args.size_usdt:.2f} USDT"
-            )
-
-        # Baseline auf den aktuellen Positionsstand des Traders aktualisieren.
-        # Schließt der Trader später einen Coin und öffnet ihn erneut, zählt
-        # das als neues Event.
-        if baselines[uid] != current_coins:
-            baselines[uid] = current_coins
-            baseline_dirty = True
-
-    if baseline_dirty:
-        _persist_baselines(args, baselines)
-
-    # 3) Abschluss: Zusammenfassung (Dateien wurden inkrementell geschrieben)
-    _persist_open(args, open_positions)
-    if history:
-        _persist_closed(args, history)
-    logger.info(
-        f"[SIM] Tick done | {len(traders)} aktive Trader | "
-        f"{trader_actions} Trader-Longs gesehen | "
-        f"+{opened} neu geoeffnet, -{closed_cnt} geschlossen | "
-        f"jetzt {len(open_positions)} Sim-Positionen offen"
+    adapter_task = asyncio.create_task(adapter.start())
+    reload_task  = asyncio.create_task(_traders_reload_loop(adapter, state, args))
+    signal_task  = asyncio.create_task(_signal_loop(adapter, state, args))
+    status_task  = (
+        asyncio.create_task(_status_loop(state, args.status_interval))
+        if args.show_status else None
     )
+    tasks = [adapter_task, reload_task, signal_task]
+    if status_task:
+        tasks.append(status_task)
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── CLI ───────────────────────────────────────────────────────────────────────
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Copy-Trade Simulator (Live-Signal-Adapter)")
+    p.add_argument("--traders-file",    default=DEFAULT_TRADERS_FILE)
+    p.add_argument("--open-file",       default=DEFAULT_OPEN_FILE)
+    p.add_argument("--closed-file",     default=DEFAULT_CLOSED_FILE)
+    p.add_argument("--stats-file",      default=DEFAULT_STATS_FILE)
+    p.add_argument("--poll-interval",   type=float, default=DEFAULT_POLL,
+                   help="Adapter-Poll-Intervall in Sekunden")
+    p.add_argument("--traders-reload",  type=float, default=DEFAULT_TRADERS_RELOAD,
+                   help="Intervall fuer erneutes Lesen von traders_export.json")
+    p.add_argument("--size-usdt",       type=float, default=DEFAULT_SIZE_USDT)
+    p.add_argument("--min-win-rate",    type=float, default=DEFAULT_MIN_WIN_RATE)
+    p.add_argument("--usdt-eur-rate",   type=float, default=DEFAULT_USDT_EUR)
+    p.add_argument("--show-status",     action="store_true")
+    p.add_argument("--status-interval", type=float, default=DEFAULT_STATUS_EVERY)
+    return p.parse_args()
+
+
 def main() -> int:
-    p = argparse.ArgumentParser(description="Copy-Trade Simulator (ohne Dashboard)")
-    p.add_argument("--traders-file",  default=DEFAULT_TRADERS_FILE)
-    p.add_argument("--open-file",     default=DEFAULT_OPEN_FILE,
-                   help="Ziel-JSON fuer offene Sim-Positionen "
-                        f"(Default {DEFAULT_OPEN_FILE})")
-    p.add_argument("--closed-file",   default=DEFAULT_CLOSED_FILE,
-                   help="Ziel-JSON fuer geschlossene Sim-Trades "
-                        f"(Default {DEFAULT_CLOSED_FILE})")
-    p.add_argument("--stats-file",    default=DEFAULT_STATS_FILE)
-    p.add_argument("--baseline-file", default=DEFAULT_BASELINE_FILE,
-                   help="Ziel-JSON fuer Trader-Positions-Baseline "
-                        f"(Default {DEFAULT_BASELINE_FILE})")
-    p.add_argument("--poll-interval", type=float, default=DEFAULT_POLL)
-    p.add_argument("--size-usdt",     type=float, default=DEFAULT_SIZE_USDT)
-    p.add_argument("--min-win-rate",  type=float, default=DEFAULT_MIN_WIN_RATE)
-    p.add_argument("--usdt-eur-rate", type=float, default=DEFAULT_USDT_EUR)
-    args = p.parse_args()
+    args = _parse_args()
 
     logger.remove()
     logger.add(sys.stderr, level="INFO", format=(
@@ -439,89 +474,26 @@ def main() -> int:
     logger.info(
         f"[SIM] Start | cwd={os.getcwd()} "
         f"size={args.size_usdt} USDT minWR={args.min_win_rate}% "
-        f"poll={args.poll_interval}s (1 USDT ≈ {args.usdt_eur_rate:.2f} EUR)"
+        f"poll={args.poll_interval}s reload={args.traders_reload}s "
+        f"(1 USDT ≈ {args.usdt_eur_rate:.2f} EUR)"
     )
-    logger.info(
-        f"[SIM] Files: traders={os.path.abspath(args.traders_file)}"
-    )
-    logger.info(
-        f"[SIM]        open   ={os.path.abspath(args.open_file)}"
-    )
-    logger.info(
-        f"[SIM]        closed ={os.path.abspath(args.closed_file)}"
-    )
-    logger.info(
-        f"[SIM]        stats  ={os.path.abspath(args.stats_file)}"
-    )
-    logger.info(
-        f"[SIM]        baseline={os.path.abspath(args.baseline_file)}"
-    )
+    logger.info(f"[SIM] Files: traders={os.path.abspath(args.traders_file)}")
+    logger.info(f"[SIM]        open   ={os.path.abspath(args.open_file)}")
+    logger.info(f"[SIM]        closed ={os.path.abspath(args.closed_file)}")
+    logger.info(f"[SIM]        stats  ={os.path.abspath(args.stats_file)}")
 
     if not os.path.exists(args.traders_file):
         logger.error(
             f"[SIM] traders_export.json nicht gefunden unter "
-            f"{os.path.abspath(args.traders_file)} — "
-            f"bitte zuerst find_traders.py --append-to ausfuehren."
+            f"{os.path.abspath(args.traders_file)} — bitte zuerst "
+            f"find_traders.py --append-to ausfuehren."
         )
         return 2
 
-    state = {
-        "positions": _load_with_fallback(args.open_file, _LEGACY_OPEN_FILE, []),
-        "history":   _load_with_fallback(args.closed_file, _LEGACY_CLOSED_FILE, []),
-        "baselines": _load_baselines(args.baseline_file),
-    }
-
-    # Bereits offene Sim-Positionen sind Teil der Baseline ihres Traders —
-    # sonst würden sie nach Neustart als „neu" gewertet werden.
-    for pos in state["positions"]:
-        uid = str(pos.get("trader_id") or "")
-        coin = str(pos.get("coin") or "")
-        if uid and coin:
-            state["baselines"].setdefault(uid, set()).add(coin)
-
-    traders_now = _load_traders(args.traders_file, args.min_win_rate)
-    logger.info(
-        f"[SIM] Geladen: {len(state['positions'])} offene Positionen, "
-        f"{len(state['history'])} Trade-Historie, "
-        f"{len(state['baselines'])} Trader-Baselines, "
-        f"{len(traders_now)} aktive Trader "
-        f"(is_copied=1 & win_rate>={args.min_win_rate}%)"
-    )
-    if not traders_now:
-        logger.warning(
-            "[SIM] Keine aktiven Trader — pruefe is_copied=1 und win_rate in "
-            "traders_export.json oder senke --min-win-rate."
-        )
-
-    # Leere Dateien anlegen, damit der Nutzer sie schon vor dem ersten Close sieht.
-    if not os.path.exists(args.open_file):
-        _save_json(args.open_file, state["positions"])
-    if not os.path.exists(args.closed_file):
-        _save_json(args.closed_file, state["history"])
-    if not os.path.exists(args.stats_file) or state["history"]:
-        _save_json(args.stats_file, _rebuild_stats(state["history"]))
-    if not os.path.exists(args.baseline_file):
-        _persist_baselines(args, state["baselines"])
-
-    running = True
-
-    def _stop(*_: object) -> None:
-        nonlocal running
-        running = False
-        logger.info("[SIM] Signal empfangen — offene Positionen bleiben bestehen")
-
-    signal.signal(signal.SIGINT, _stop)
-    signal.signal(signal.SIGTERM, _stop)
-
-    while running:
-        try:
-            _tick(state, args)
-        except Exception as e:
-            logger.exception(f"[SIM] Tick-Fehler: {e}")
-        end = time.time() + args.poll_interval
-        while running and time.time() < end:
-            time.sleep(0.5)
-
+    try:
+        asyncio.run(run(args))
+    except KeyboardInterrupt:
+        logger.info("[SIM] beendet")
     return 0
 
 
