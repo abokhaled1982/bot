@@ -17,6 +17,10 @@ Ausgaben:
   sim_positions_open.json    — aktuell offene Paper-Positionen
   sim_positions_closed.json  — geschlossene Paper-Trades (Historie mit PnL USDT+EUR)
   sim_trader_stats.json      — Status pro Trader: Trades, Winrate, Gesamt-PnL, Verdict
+  sim_trader_baselines.json  — pro Trader die zuletzt gesehenen offenen Coins.
+                               Nur Coins, die nach der ersten Sichtung neu
+                               dazukommen, loesen einen Sim-Open aus. Bereits
+                               offene Positionen des Traders werden ignoriert.
 
 Alte Dateinamen (`sim_positions.json`, `sim_history.json`) werden beim Start
 automatisch übernommen, wenn die neuen noch nicht existieren.
@@ -54,6 +58,7 @@ DEFAULT_TRADERS_FILE   = "traders_export.json"
 DEFAULT_OPEN_FILE      = "sim_positions_open.json"
 DEFAULT_CLOSED_FILE    = "sim_positions_closed.json"
 DEFAULT_STATS_FILE     = "sim_trader_stats.json"
+DEFAULT_BASELINE_FILE  = "sim_trader_baselines.json"
 _LEGACY_OPEN_FILE      = "sim_positions.json"
 _LEGACY_CLOSED_FILE    = "sim_history.json"
 DEFAULT_POLL           = 5.0
@@ -265,10 +270,23 @@ def _persist_closed(args: argparse.Namespace, history: list[dict]) -> None:
     _save_json(args.stats_file, _rebuild_stats(history))
 
 
+def _persist_baselines(args: argparse.Namespace, baselines: dict[str, list[str]]) -> None:
+    # sortiert speichern, damit Diffs im Git ruhig bleiben
+    _save_json(args.baseline_file, {uid: sorted(v) for uid, v in baselines.items()})
+
+
+def _load_baselines(path: str) -> dict[str, set[str]]:
+    raw = _load_json(path, {})
+    if not isinstance(raw, dict):
+        return {}
+    return {str(uid): set(v or []) for uid, v in raw.items() if isinstance(v, list)}
+
+
 def _tick(state: dict, args: argparse.Namespace) -> None:
     traders = _load_traders(args.traders_file, args.min_win_rate)
     open_positions: list[dict] = state["positions"]
     history: list[dict] = state["history"]
+    baselines: dict[str, set[str]] = state["baselines"]
     opened = closed_cnt = trader_actions = 0
     logger.info(
         f"[SIM] Tick start | {len(traders)} aktive Trader | "
@@ -299,6 +317,14 @@ def _tick(state: dict, args: argparse.Namespace) -> None:
             f"({closed['pnl_eur']:+.2f} EUR)"
         )
 
+    # Baseline für nicht mehr aktive Trader verwerfen — bei Reaktivierung wird
+    # der aktuelle Positionsstand erneut als Snapshot behandelt.
+    baseline_dirty = False
+    for uid in list(baselines.keys()):
+        if uid not in active_uids:
+            baselines.pop(uid, None)
+            baseline_dirty = True
+
     # 2) Diff pro aktivem Trader
     for uid, row in traders.items():
         try:
@@ -309,6 +335,18 @@ def _tick(state: dict, args: argparse.Namespace) -> None:
         trader_longs = _parse_open_longs(rows)
         trader_actions += len(trader_longs)
         ours = {p["coin"]: p for p in open_positions if p["trader_id"] == uid}
+        current_coins = set(trader_longs.keys())
+
+        # Erster Kontakt mit diesem Trader → nur Snapshot, keine OPENs.
+        if uid not in baselines:
+            baselines[uid] = current_coins | set(ours.keys())
+            baseline_dirty = True
+            logger.info(
+                f"[SIM] 📸 Baseline für Trader {uid} gesetzt "
+                f"({len(current_coins)} bestehende Positionen ignoriert)"
+            )
+
+        prev_coins = baselines[uid]
 
         # a) Coin nicht mehr in Trader-Positionen → schließen
         for coin, pos in list(ours.items()):
@@ -329,9 +367,12 @@ def _tick(state: dict, args: argparse.Namespace) -> None:
                 f"({closed['pnl_eur']:+.2f} EUR)"
             )
 
-        # b) Neuer Coin beim Trader → öffnen
+        # b) Neuer Coin beim Trader → öffnen (nur wenn nicht in Baseline)
         for coin, info in trader_longs.items():
             if coin in ours:
+                continue
+            if coin in prev_coins:
+                # Bereits beim Snapshot / letzten Poll offen — keine neue Aktion.
                 continue
             symbol = info["symbol"]
             price = _spot_price(symbol)
@@ -348,6 +389,16 @@ def _tick(state: dict, args: argparse.Namespace) -> None:
                 f"(winrate {row.get('win_rate', 0):.1f}%) "
                 f"| entry ${price:.6f} | ${args.size_usdt:.2f} USDT"
             )
+
+        # Baseline auf den aktuellen Positionsstand des Traders aktualisieren.
+        # Schließt der Trader später einen Coin und öffnet ihn erneut, zählt
+        # das als neues Event.
+        if baselines[uid] != current_coins:
+            baselines[uid] = current_coins
+            baseline_dirty = True
+
+    if baseline_dirty:
+        _persist_baselines(args, baselines)
 
     # 3) Abschluss: Zusammenfassung (Dateien wurden inkrementell geschrieben)
     _persist_open(args, open_positions)
@@ -372,6 +423,9 @@ def main() -> int:
                    help="Ziel-JSON fuer geschlossene Sim-Trades "
                         f"(Default {DEFAULT_CLOSED_FILE})")
     p.add_argument("--stats-file",    default=DEFAULT_STATS_FILE)
+    p.add_argument("--baseline-file", default=DEFAULT_BASELINE_FILE,
+                   help="Ziel-JSON fuer Trader-Positions-Baseline "
+                        f"(Default {DEFAULT_BASELINE_FILE})")
     p.add_argument("--poll-interval", type=float, default=DEFAULT_POLL)
     p.add_argument("--size-usdt",     type=float, default=DEFAULT_SIZE_USDT)
     p.add_argument("--min-win-rate",  type=float, default=DEFAULT_MIN_WIN_RATE)
@@ -399,6 +453,9 @@ def main() -> int:
     logger.info(
         f"[SIM]        stats  ={os.path.abspath(args.stats_file)}"
     )
+    logger.info(
+        f"[SIM]        baseline={os.path.abspath(args.baseline_file)}"
+    )
 
     if not os.path.exists(args.traders_file):
         logger.error(
@@ -411,12 +468,22 @@ def main() -> int:
     state = {
         "positions": _load_with_fallback(args.open_file, _LEGACY_OPEN_FILE, []),
         "history":   _load_with_fallback(args.closed_file, _LEGACY_CLOSED_FILE, []),
+        "baselines": _load_baselines(args.baseline_file),
     }
+
+    # Bereits offene Sim-Positionen sind Teil der Baseline ihres Traders —
+    # sonst würden sie nach Neustart als „neu" gewertet werden.
+    for pos in state["positions"]:
+        uid = str(pos.get("trader_id") or "")
+        coin = str(pos.get("coin") or "")
+        if uid and coin:
+            state["baselines"].setdefault(uid, set()).add(coin)
 
     traders_now = _load_traders(args.traders_file, args.min_win_rate)
     logger.info(
         f"[SIM] Geladen: {len(state['positions'])} offene Positionen, "
         f"{len(state['history'])} Trade-Historie, "
+        f"{len(state['baselines'])} Trader-Baselines, "
         f"{len(traders_now)} aktive Trader "
         f"(is_copied=1 & win_rate>={args.min_win_rate}%)"
     )
@@ -433,6 +500,8 @@ def main() -> int:
         _save_json(args.closed_file, state["history"])
     if not os.path.exists(args.stats_file) or state["history"]:
         _save_json(args.stats_file, _rebuild_stats(state["history"]))
+    if not os.path.exists(args.baseline_file):
+        _persist_baselines(args, state["baselines"])
 
     running = True
 
