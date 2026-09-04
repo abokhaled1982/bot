@@ -61,7 +61,7 @@
     "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=Positions",
     "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=TradeHistory",
     "first_event_at": "2026-09-04 01:27:49 CEST",
-    "event_count": 30,
+    "event_count": 31,
     "events": [
       {
         "event_id": "5202645233055269889:HYPE:1788478069169617223",
@@ -1172,11 +1172,42 @@
         "pnl_pct": 0.07263952654742944,
         "unrealized_pnl": 0.66039335,
         "previous_position": null
+      },
+      {
+        "event_id": "5202645233055269889:PROM:1788506783452485325",
+        "trader_id": "5202645233055269889",
+        "trader_id_short": "520264...9889",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/PROMUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/PROMUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788506783.452477,
+          "utc": "2026-09-04T07:26:23.452477+00:00",
+          "berlin": "2026-09-04 09:26:23 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": null,
+        "action": "OPEN_LONG",
+        "side": "LONG",
+        "coin": "PROM",
+        "symbol": "PROMUSDT",
+        "size": 156.8,
+        "size_change": 156.8,
+        "value_usd": 868.9856000000001,
+        "value_change_usd": 868.9856000000001,
+        "entry_price": 5.542,
+        "leverage": 20.0,
+        "pnl_pct": -0.6676290147961024,
+        "unrealized_pnl": -5.8016,
+        "previous_position": null
       }
     ],
-    "last_event_at": "2026-09-04 09:11:33 CEST",
+    "last_event_at": "2026-09-04 09:26:23 CEST",
     "last_action": "OPEN_LONG",
-    "last_symbol": "BCHUSDT"
+    "last_symbol": "PROMUSDT"
   },
   "5128794639663914496": {
     "trader_id": "5128794639663914496",
