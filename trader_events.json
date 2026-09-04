@@ -1,0 +1,47 @@
+{
+  "5137420247055864833": {
+    "trader_id": "5137420247055864833",
+    "trader_id_short": "513742...4833",
+    "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5137420247055864833?timeRange=30D",
+    "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5137420247055864833?tab=Positions",
+    "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5137420247055864833?tab=TradeHistory",
+    "first_event_at": "2026-09-04 13:30:35 CEST",
+    "event_count": 1,
+    "events": [
+      {
+        "event_id": "5137420247055864833:\u725b\u6765:1788521435361217617",
+        "trader_id": "5137420247055864833",
+        "trader_id_short": "513742...4833",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5137420247055864833?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5137420247055864833?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5137420247055864833?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/\u725b\u6765USDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/\u725b\u6765USDT?type=spot",
+        "detected_at": {
+          "unix": 1788521435.3612132,
+          "utc": "2026-09-04T11:30:35.361213+00:00",
+          "berlin": "2026-09-04 13:30:35 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": null,
+        "action": "OPEN_LONG",
+        "side": "LONG",
+        "coin": "\u725b\u6765",
+        "symbol": "\u725b\u6765USDT",
+        "size": 9604.0,
+        "size_change": 9604.0,
+        "value_usd": 897.1472599999998,
+        "value_change_usd": 897.1472599999998,
+        "entry_price": 0.09341391711786753,
+        "leverage": 10.0,
+        "pnl_pct": -0.12194114486845785,
+        "unrealized_pnl": -1.09399164,
+        "previous_position": null
+      }
+    ],
+    "last_event_at": "2026-09-04 13:30:35 CEST",
+    "last_action": "OPEN_LONG",
+    "last_symbol": "\u725b\u6765USDT"
+  }
+}

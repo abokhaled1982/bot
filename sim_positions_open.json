@@ -1,1 +1,86 @@
-[]
+[
+  {
+    "trader_id": "4955446502588956417",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4955446502588956417?timeRange=30D",
+    "trader_win_rate": 94.8718,
+    "coin": "XMR",
+    "symbol": "XMRUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 118.7,
+    "entry_price_trader": 544.89,
+    "qty": 0.08424599831508003,
+    "opened_at": 1788522858.2669976,
+    "opened_at_iso": "2026-09-04T13:54:18+02:00"
+  },
+  {
+    "trader_id": "5082709428401042433",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5082709428401042433?timeRange=30D",
+    "trader_win_rate": 95.2381,
+    "coin": "AVAX",
+    "symbol": "AVAXUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 7.316,
+    "entry_price_trader": 7.467000000000002,
+    "qty": 1.366867140513942,
+    "opened_at": 1788525210.6702821,
+    "opened_at_iso": "2026-09-04T14:33:30+02:00"
+  },
+  {
+    "trader_id": "5191199342167071489",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5191199342167071489?timeRange=30D",
+    "trader_win_rate": 80.5556,
+    "coin": "BTC",
+    "symbol": "BTCUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 79990.0,
+    "entry_price_trader": 79843.40000000001,
+    "qty": 0.00012501562695336918,
+    "opened_at": 1788525725.1660721,
+    "opened_at_iso": "2026-09-04T14:42:05+02:00"
+  },
+  {
+    "trader_id": "4977139794479123713",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4977139794479123713?timeRange=30D",
+    "trader_win_rate": 85.7143,
+    "coin": "BTC",
+    "symbol": "BTCUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 79479.99,
+    "entry_price_trader": 79166.7,
+    "qty": 0.00012581783163284242,
+    "opened_at": 1788526187.7728765,
+    "opened_at_iso": "2026-09-04T14:49:47+02:00"
+  },
+  {
+    "trader_id": "5201092009940714496",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5201092009940714496?timeRange=30D",
+    "trader_win_rate": 100.0,
+    "coin": "ETH",
+    "symbol": "ETHUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 2456.28,
+    "entry_price_trader": 2454.46,
+    "qty": 0.004071197094793753,
+    "opened_at": 1788526419.558066,
+    "opened_at_iso": "2026-09-04T14:53:39+02:00"
+  },
+  {
+    "trader_id": "5146066001912347648",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5146066001912347648?timeRange=30D",
+    "trader_win_rate": 85.1852,
+    "coin": "ADA",
+    "symbol": "ADAUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 0.213,
+    "entry_price_trader": 0.21330000000000002,
+    "qty": 46.948356807511736,
+    "opened_at": 1788535315.885472,
+    "opened_at_iso": "2026-09-04T17:21:55+02:00"
+  }
+]
