@@ -61,7 +61,7 @@
     "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=Positions",
     "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=TradeHistory",
     "first_event_at": "2026-09-04 01:27:49 CEST",
-    "event_count": 29,
+    "event_count": 30,
     "events": [
       {
         "event_id": "5202645233055269889:HYPE:1788478069169617223",
@@ -1141,11 +1141,42 @@
           "unrealized_pnl": -23.25853017,
           "updated_at": 1788501074.115952
         }
+      },
+      {
+        "event_id": "5202645233055269889:BCH:1788505893282166286",
+        "trader_id": "5202645233055269889",
+        "trader_id_short": "520264...9889",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/BCHUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/BCHUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788505893.2821631,
+          "utc": "2026-09-04T07:11:33.282163+00:00",
+          "berlin": "2026-09-04 09:11:33 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": null,
+        "action": "OPEN_LONG",
+        "side": "LONG",
+        "coin": "BCH",
+        "symbol": "BCHUSDT",
+        "size": 3.535,
+        "size_change": 3.535,
+        "value_usd": 909.1377399999999,
+        "value_change_usd": 909.1377399999999,
+        "entry_price": 257.1818217821782,
+        "leverage": 20.0,
+        "pnl_pct": 0.07263952654742944,
+        "unrealized_pnl": 0.66039335,
+        "previous_position": null
       }
     ],
-    "last_event_at": "2026-09-04 07:51:49 CEST",
-    "last_action": "CLOSE_LONG",
-    "last_symbol": "WIFUSDT"
+    "last_event_at": "2026-09-04 09:11:33 CEST",
+    "last_action": "OPEN_LONG",
+    "last_symbol": "BCHUSDT"
   },
   "5128794639663914496": {
     "trader_id": "5128794639663914496",
@@ -2948,7 +2979,7 @@
     "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/4319310210742133760?tab=Positions",
     "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/4319310210742133760?tab=TradeHistory",
     "first_event_at": "2026-09-04 02:45:56 CEST",
-    "event_count": 39,
+    "event_count": 40,
     "events": [
       {
         "event_id": "4319310210742133760:ZEC:1788482756734669358",
@@ -4368,11 +4399,52 @@
         "pnl_pct": 14.849448964142677,
         "unrealized_pnl": 4.6251474,
         "previous_position": null
+      },
+      {
+        "event_id": "4319310210742133760:ZEC:1788505854537879441",
+        "trader_id": "4319310210742133760",
+        "trader_id_short": "431931...3760",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/4319310210742133760?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/4319310210742133760?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/4319310210742133760?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/ZECUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/ZECUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788505854.5378742,
+          "utc": "2026-09-04T07:10:54.537874+00:00",
+          "berlin": "2026-09-04 09:10:54 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": 35.334,
+        "action": "INCREASE_LONG",
+        "side": "LONG",
+        "coin": "ZEC",
+        "symbol": "ZECUSDT",
+        "size": 1.105,
+        "size_change": 0.125,
+        "value_usd": 972.0729487536394,
+        "value_change_usd": 121.03375000000005,
+        "entry_price": 879.7040260213931,
+        "leverage": 20.0,
+        "pnl_pct": 10.316907374964593,
+        "unrealized_pnl": 100.28786574,
+        "previous_position": {
+          "coin": "ZEC",
+          "symbol": "ZECUSDT",
+          "size": 0.98,
+          "entry_px": 868.4073456669789,
+          "leverage": 20.0,
+          "pnl_pct": 10.987085129208937,
+          "value_usd": 851.0391987536393,
+          "unrealized_pnl": 93.50440125,
+          "updated_at": 1788505819.2033865
+        }
       }
     ],
-    "last_event_at": "2026-09-04 08:38:11 CEST",
-    "last_action": "OPEN_LONG",
-    "last_symbol": "QUSDT"
+    "last_event_at": "2026-09-04 09:10:54 CEST",
+    "last_action": "INCREASE_LONG",
+    "last_symbol": "ZECUSDT"
   },
   "5195819679685928193": {
     "trader_id": "5195819679685928193",
