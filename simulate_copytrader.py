@@ -425,7 +425,13 @@ def main() -> int:
             "[SIM] Keine aktiven Trader — pruefe is_copied=1 und win_rate in "
             "traders_export.json oder senke --min-win-rate."
         )
-    if state["history"]:
+
+    # Leere Dateien anlegen, damit der Nutzer sie schon vor dem ersten Close sieht.
+    if not os.path.exists(args.open_file):
+        _save_json(args.open_file, state["positions"])
+    if not os.path.exists(args.closed_file):
+        _save_json(args.closed_file, state["history"])
+    if not os.path.exists(args.stats_file) or state["history"]:
         _save_json(args.stats_file, _rebuild_stats(state["history"]))
 
     running = True
