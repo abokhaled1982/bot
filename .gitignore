@@ -6,15 +6,11 @@ env/
 
 
 # Database and Session files
+db/
 *.db
+*.db-*
 *.session
-*.db-journal
-.db-shm
-.db-*
-.db.bak
-.db-wal
-binance_orderflow.db-shm
-binance_orderflow.db-wal
+*.db.bak
 # Python Cache
 __pycache__/
 *.pyc

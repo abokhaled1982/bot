@@ -49,7 +49,7 @@ TAKER_FEE     = float(os.getenv("BINANCE_TAKER_FEE_PCT", "0.1"))
 SLIPPAGE_BPS  = float(os.getenv("SCALP_SLIPPAGE_BPS", "2"))
 ROUND_TRIP    = 2 * TAKER_FEE + (2 * SLIPPAGE_BPS / 100)
 
-DB_PATH = os.getenv("BOT_DB_PATH", "binance_orderflow.db")
+DB_PATH = os.getenv("BOT_DB_PATH", "db/binance_orderflow.db")
 HISTORY_PATH = os.getenv("COPY_HISTORY_FILE", "copy_history.json")
 CLOSE_REQUEST_PATH = os.getenv("COPY_CLOSE_REQUEST_FILE", "close_requests.json")
 MAX_HISTORY = 500

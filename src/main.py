@@ -14,7 +14,7 @@ from loguru import logger
 
 load_dotenv()
 
-DB_PATH = os.getenv("BOT_DB_PATH", "binance_orderflow.db")
+DB_PATH = os.getenv("BOT_DB_PATH", "db/binance_orderflow.db")
 
 
 def _init_db() -> None:

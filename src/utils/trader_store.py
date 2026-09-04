@@ -40,7 +40,7 @@ import sqlite3
 import time
 from typing import Any, Optional
 
-DB_PATH = os.getenv("BOT_DB_PATH", "binance_orderflow.db")
+DB_PATH = os.getenv("BOT_DB_PATH", "db/binance_orderflow.db")
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS copy_traders (
@@ -128,6 +128,9 @@ def _connect() -> sqlite3.Connection:
 
 def init_db() -> None:
     """Idempotent: Schema anlegen, falls noch nicht vorhanden."""
+    parent = os.path.dirname(DB_PATH)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with _connect() as conn:
         for stmt in _SCHEMA:
             conn.execute(stmt)
