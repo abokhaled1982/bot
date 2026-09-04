@@ -61,7 +61,7 @@
     "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=Positions",
     "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=TradeHistory",
     "first_event_at": "2026-09-04 01:27:49 CEST",
-    "event_count": 31,
+    "event_count": 32,
     "events": [
       {
         "event_id": "5202645233055269889:HYPE:1788478069169617223",
@@ -1203,11 +1203,52 @@
         "pnl_pct": -0.6676290147961024,
         "unrealized_pnl": -5.8016,
         "previous_position": null
+      },
+      {
+        "event_id": "5202645233055269889:BCH:1788508694256843547",
+        "trader_id": "5202645233055269889",
+        "trader_id_short": "520264...9889",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5202645233055269889?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/BCHUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/BCHUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788508694.2568402,
+          "utc": "2026-09-04T07:58:14.256840+00:00",
+          "berlin": "2026-09-04 09:58:14 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": 35.661,
+        "action": "CLOSE_LONG",
+        "side": "LONG",
+        "coin": "BCH",
+        "symbol": "BCHUSDT",
+        "size": 3.535,
+        "size_change": 0.0,
+        "value_usd": 909.1377399999999,
+        "value_change_usd": 0.0,
+        "entry_price": 257.1818217821782,
+        "leverage": 20.0,
+        "pnl_pct": -0.22729062045097814,
+        "unrealized_pnl": -2.06638481,
+        "previous_position": {
+          "coin": "BCH",
+          "symbol": "BCHUSDT",
+          "size": 3.535,
+          "entry_px": 257.1818217821782,
+          "leverage": 20.0,
+          "pnl_pct": -0.22729062045097814,
+          "value_usd": 909.1377399999999,
+          "unrealized_pnl": -2.06638481,
+          "updated_at": 1788508658.595466
+        }
       }
     ],
-    "last_event_at": "2026-09-04 09:26:23 CEST",
-    "last_action": "OPEN_LONG",
-    "last_symbol": "PROMUSDT"
+    "last_event_at": "2026-09-04 09:58:14 CEST",
+    "last_action": "CLOSE_LONG",
+    "last_symbol": "BCHUSDT"
   },
   "5128794639663914496": {
     "trader_id": "5128794639663914496",
@@ -1995,7 +2036,7 @@
     "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?tab=Positions",
     "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?tab=TradeHistory",
     "first_event_at": "2026-09-04 02:23:52 CEST",
-    "event_count": 24,
+    "event_count": 26,
     "events": [
       {
         "event_id": "5199714964383563008:KORU:1788481432661177996",
@@ -2880,11 +2921,73 @@
         "pnl_pct": -0.16625231169825364,
         "unrealized_pnl": -0.49776125,
         "previous_position": null
+      },
+      {
+        "event_id": "5199714964383563008:XAU:1788509323624486874",
+        "trader_id": "5199714964383563008",
+        "trader_id_short": "519971...3008",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/XAUUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/XAUUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788509323.6244786,
+          "utc": "2026-09-04T08:08:43.624479+00:00",
+          "berlin": "2026-09-04 10:08:43 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": null,
+        "action": "OPEN_SHORT",
+        "side": "SHORT",
+        "coin": "XAU",
+        "symbol": "XAUUSDT",
+        "size": -0.445,
+        "size_change": -0.445,
+        "value_usd": 1996.6794,
+        "value_change_usd": 1996.6794,
+        "entry_price": 4486.92,
+        "leverage": 20.0,
+        "pnl_pct": 0.02313236666837951,
+        "unrealized_pnl": 0.4618792,
+        "previous_position": null
+      },
+      {
+        "event_id": "5199714964383563008:SNDK:1788509323624659703",
+        "trader_id": "5199714964383563008",
+        "trader_id_short": "519971...3008",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/SNDKUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/SNDKUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788509323.624655,
+          "utc": "2026-09-04T08:08:43.624655+00:00",
+          "berlin": "2026-09-04 10:08:43 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": null,
+        "action": "OPEN_SHORT",
+        "side": "SHORT",
+        "coin": "SNDK",
+        "symbol": "SNDKUSDT",
+        "size": -6.29,
+        "size_change": -6.29,
+        "value_usd": 9987.1157,
+        "value_change_usd": 9987.1157,
+        "entry_price": 1587.7767408585055,
+        "leverage": 20.0,
+        "pnl_pct": -0.3459717608958911,
+        "unrealized_pnl": -34.55260005,
+        "previous_position": null
       }
     ],
-    "last_event_at": "2026-09-04 09:07:59 CEST",
+    "last_event_at": "2026-09-04 10:08:43 CEST",
     "last_action": "OPEN_SHORT",
-    "last_symbol": "ZECUSDT"
+    "last_symbol": "SNDKUSDT"
   },
   "5194599631640862977": {
     "trader_id": "5194599631640862977",
@@ -5119,7 +5222,7 @@
     "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5194385911194262785?tab=Positions",
     "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5194385911194262785?tab=TradeHistory",
     "first_event_at": "2026-09-04 06:00:17 CEST",
-    "event_count": 56,
+    "event_count": 57,
     "events": [
       {
         "event_id": "5194385911194262785:DASH:1788494417399942350",
@@ -7156,10 +7259,41 @@
           "unrealized_pnl": 48.99587945,
           "updated_at": 1788501433.4291823
         }
+      },
+      {
+        "event_id": "5194385911194262785:SNDK:1788508356505515811",
+        "trader_id": "5194385911194262785",
+        "trader_id_short": "519438...2785",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5194385911194262785?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5194385911194262785?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5194385911194262785?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/SNDKUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/SNDKUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788508356.5055068,
+          "utc": "2026-09-04T07:52:36.505507+00:00",
+          "berlin": "2026-09-04 09:52:36 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": null,
+        "action": "OPEN_LONG",
+        "side": "LONG",
+        "coin": "SNDK",
+        "symbol": "SNDKUSDT",
+        "size": 0.5,
+        "size_change": 0.5,
+        "value_usd": 790.4200000000001,
+        "value_change_usd": 790.4200000000001,
+        "entry_price": 1580.8400000000001,
+        "leverage": 75.0,
+        "pnl_pct": 0.04554540623972065,
+        "unrealized_pnl": 0.36,
+        "previous_position": null
       }
     ],
-    "last_event_at": "2026-09-04 07:57:50 CEST",
-    "last_action": "CLOSE_LONG",
+    "last_event_at": "2026-09-04 09:52:36 CEST",
+    "last_action": "OPEN_LONG",
     "last_symbol": "SNDKUSDT"
   },
   "5197458570159801857": {
@@ -7361,7 +7495,7 @@
     "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5075520138668888576?tab=Positions",
     "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5075520138668888576?tab=TradeHistory",
     "first_event_at": "2026-09-04 08:57:11 CEST",
-    "event_count": 1,
+    "event_count": 3,
     "events": [
       {
         "event_id": "5075520138668888576:XAU:1788505031953348476",
@@ -7403,10 +7537,92 @@
           "unrealized_pnl": -138.45,
           "updated_at": 1788504995.658905
         }
+      },
+      {
+        "event_id": "5075520138668888576:XAU:1788507822518675261",
+        "trader_id": "5075520138668888576",
+        "trader_id_short": "507552...8576",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5075520138668888576?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5075520138668888576?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5075520138668888576?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/XAUUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/XAUUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788507822.5186675,
+          "utc": "2026-09-04T07:43:42.518667+00:00",
+          "berlin": "2026-09-04 09:43:42 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": 33.72,
+        "action": "DECREASE_LONG",
+        "side": "LONG",
+        "coin": "XAU",
+        "symbol": "XAUUSDT",
+        "size": 7.0,
+        "size_change": -3.0,
+        "value_usd": 31359.299999999996,
+        "value_change_usd": -13439.700000000004,
+        "entry_price": 4479.9,
+        "leverage": 25.0,
+        "pnl_pct": 0.1582231648027858,
+        "unrealized_pnl": 49.61767692,
+        "previous_position": {
+          "coin": "XAU",
+          "symbol": "XAUUSDT",
+          "size": 10.0,
+          "entry_px": 4479.9,
+          "leverage": 25.0,
+          "pnl_pct": -0.03549186365767093,
+          "value_usd": 44799.0,
+          "unrealized_pnl": -15.9,
+          "updated_at": 1788507788.7984056
+        }
+      },
+      {
+        "event_id": "5075520138668888576:UNI:1788509962180009299",
+        "trader_id": "5075520138668888576",
+        "trader_id_short": "507552...8576",
+        "trader_profile_url": "https://www.binance.com/en/copy-trading/lead-details/5075520138668888576?timeRange=30D",
+        "trader_positions_url": "https://www.binance.com/en/copy-trading/lead-details/5075520138668888576?tab=Positions",
+        "trader_history_url": "https://www.binance.com/en/copy-trading/lead-details/5075520138668888576?tab=TradeHistory",
+        "binance_symbol_url": "https://www.binance.com/en/futures/UNIUSDT",
+        "binance_price_chart_url": "https://www.binance.com/en/trade/UNIUSDT?type=spot",
+        "detected_at": {
+          "unix": 1788509962.1800053,
+          "utc": "2026-09-04T08:19:22.180005+00:00",
+          "berlin": "2026-09-04 10:19:22 CEST"
+        },
+        "trader_action_at": null,
+        "detection_latency_sec": null,
+        "poll_gap_sec": 32.828,
+        "action": "CLOSE_LONG",
+        "side": "LONG",
+        "coin": "UNI",
+        "symbol": "UNIUSDT",
+        "size": 100.0,
+        "size_change": 0.0,
+        "value_usd": 622.3,
+        "value_change_usd": 0.0,
+        "entry_price": 6.223,
+        "leverage": 20.0,
+        "pnl_pct": 1.1153507954362847,
+        "unrealized_pnl": 6.940828,
+        "previous_position": {
+          "coin": "UNI",
+          "symbol": "UNIUSDT",
+          "size": 100.0,
+          "entry_px": 6.223,
+          "leverage": 20.0,
+          "pnl_pct": 1.1153507954362847,
+          "value_usd": 622.3,
+          "unrealized_pnl": 6.940828,
+          "updated_at": 1788509929.3520632
+        }
       }
     ],
-    "last_event_at": "2026-09-04 08:57:11 CEST",
-    "last_action": "INCREASE_LONG",
-    "last_symbol": "XAUUSDT"
+    "last_event_at": "2026-09-04 10:19:22 CEST",
+    "last_action": "CLOSE_LONG",
+    "last_symbol": "UNIUSDT"
   }
 }
