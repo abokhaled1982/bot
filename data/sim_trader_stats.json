@@ -134,6 +134,17 @@
   {
     "trader_id": "4955446502588956417",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4955446502588956417?timeRange=30D",
+    "trades": 2,
+    "wins": 0,
+    "losses": 0,
+    "pnl_usdt": 0.0,
+    "pnl_eur": 0.0,
+    "win_rate": 0.0,
+    "verdict": "NEUTRAL"
+  },
+  {
+    "trader_id": "5191117732243839488",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5191117732243839488?timeRange=30D",
     "trades": 1,
     "wins": 0,
     "losses": 0,

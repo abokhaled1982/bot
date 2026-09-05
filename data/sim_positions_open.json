@@ -140,20 +140,6 @@
     "opened_at_iso": "2026-09-05T00:04:13+02:00"
   },
   {
-    "trader_id": "5191117732243839488",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5191117732243839488?timeRange=30D",
-    "trader_win_rate": 100.0,
-    "coin": "XMR",
-    "symbol": "XMRUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 118.7,
-    "entry_price_trader": 516.58,
-    "qty": 0.08424599831508003,
-    "opened_at": 1788559537.8005471,
-    "opened_at_iso": "2026-09-05T00:05:37+02:00"
-  },
-  {
     "trader_id": "5205245593439966464",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5205245593439966464?timeRange=30D",
     "trader_win_rate": 100.0,
@@ -712,20 +698,6 @@
     "qty": 0.004067818672914836,
     "opened_at": 1788599395.851057,
     "opened_at_iso": "2026-09-05T11:09:55+02:00"
-  },
-  {
-    "trader_id": "4955446502588956417",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4955446502588956417?timeRange=30D",
-    "trader_win_rate": 94.8718,
-    "coin": "XMR",
-    "symbol": "XMRUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 118.7,
-    "entry_price_trader": 526.0600000000001,
-    "qty": 0.08424599831508003,
-    "opened_at": 1788600411.1794498,
-    "opened_at_iso": "2026-09-05T11:26:51+02:00"
   },
   {
     "trader_id": "4941095930830452224",
