@@ -922,5 +922,26 @@
     "closed_at": 1788643245.9509873,
     "closed_at_iso": "2026-09-05T23:20:45+02:00",
     "close_reason": "TRADER_CLOSED"
+  },
+  {
+    "trader_id": "5189756987442201856",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5189756987442201856?timeRange=30D",
+    "trader_win_rate": 95.7282,
+    "coin": "MARSCOIN",
+    "symbol": "MARSCOINUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 0.2337,
+    "entry_price_trader": 0.23298596774193547,
+    "qty": 42.78990158322636,
+    "opened_at": 1788643245.5846093,
+    "opened_at_iso": "2026-09-05T23:20:45+02:00",
+    "exit_price": 0.2407,
+    "pnl_pct": 2.9953,
+    "pnl_usdt": 0.2995,
+    "pnl_eur": 0.2756,
+    "closed_at": 1788643944.4180915,
+    "closed_at_iso": "2026-09-05T23:32:24+02:00",
+    "close_reason": "TRADER_CLOSED"
   }
 ]

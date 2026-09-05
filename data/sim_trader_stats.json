@@ -2,12 +2,12 @@
   {
     "trader_id": "5189756987442201856",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5189756987442201856?timeRange=30D",
-    "trades": 10,
-    "wins": 8,
+    "trades": 11,
+    "wins": 9,
     "losses": 1,
-    "pnl_usdt": 1.1691,
-    "pnl_eur": 1.0756,
-    "win_rate": 80.0,
+    "pnl_usdt": 1.4686,
+    "pnl_eur": 1.3512,
+    "win_rate": 81.82,
     "verdict": "HELPFUL"
   },
   {

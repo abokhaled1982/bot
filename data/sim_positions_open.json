@@ -647,14 +647,28 @@
     "trader_id": "5189756987442201856",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5189756987442201856?timeRange=30D",
     "trader_win_rate": 95.7282,
-    "coin": "MARSCOIN",
-    "symbol": "MARSCOINUSDT",
+    "coin": "1000CAT",
+    "symbol": "1000CATUSDT",
     "side": "LONG",
     "size_usdt": 10.0,
-    "entry_price": 0.2337,
-    "entry_price_trader": 0.23298596774193547,
-    "qty": 42.78990158322636,
-    "opened_at": 1788643245.5846093,
-    "opened_at_iso": "2026-09-05T23:20:45+02:00"
+    "entry_price": 0.002525,
+    "entry_price_trader": 0.002517,
+    "qty": 3960.3960396039606,
+    "opened_at": 1788644119.5416152,
+    "opened_at_iso": "2026-09-05T23:35:19+02:00"
+  },
+  {
+    "trader_id": "5189756987442201856",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5189756987442201856?timeRange=30D",
+    "trader_win_rate": 95.7282,
+    "coin": "MUBARAK",
+    "symbol": "MUBARAKUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 0.03259,
+    "entry_price_trader": 0.03242,
+    "qty": 306.84258975145747,
+    "opened_at": 1788644469.237456,
+    "opened_at_iso": "2026-09-05T23:41:09+02:00"
   }
 ]
