@@ -602,34 +602,6 @@
     "opened_at_iso": "2026-09-05T06:46:31+02:00"
   },
   {
-    "trader_id": "4941095930830452224",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4941095930830452224?timeRange=30D",
-    "trader_win_rate": 94.8718,
-    "coin": "ETH",
-    "symbol": "ETHUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 2450.02,
-    "entry_price_trader": 2479.148383838384,
-    "qty": 0.004081599333882989,
-    "opened_at": 1788583601.7556808,
-    "opened_at_iso": "2026-09-05T06:46:41+02:00"
-  },
-  {
-    "trader_id": "4941095930830452224",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4941095930830452224?timeRange=30D",
-    "trader_win_rate": 94.8718,
-    "coin": "BTC",
-    "symbol": "BTCUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 79530.0,
-    "entry_price_trader": 80336.875,
-    "qty": 0.0001257387149503332,
-    "opened_at": 1788583602.090252,
-    "opened_at_iso": "2026-09-05T06:46:42+02:00"
-  },
-  {
     "trader_id": "5157640069085197057",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5157640069085197057?timeRange=30D",
     "trader_win_rate": 93.5484,
@@ -726,5 +698,61 @@
     "qty": 0.042735042735042736,
     "opened_at": 1788594811.9753792,
     "opened_at_iso": "2026-09-05T09:53:31+02:00"
+  },
+  {
+    "trader_id": "5201671754533737473",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5201671754533737473?timeRange=30D",
+    "trader_win_rate": 96.7213,
+    "coin": "ETH",
+    "symbol": "ETHUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 2458.32,
+    "entry_price_trader": 2457.11,
+    "qty": 0.004067818672914836,
+    "opened_at": 1788599395.851057,
+    "opened_at_iso": "2026-09-05T11:09:55+02:00"
+  },
+  {
+    "trader_id": "4955446502588956417",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4955446502588956417?timeRange=30D",
+    "trader_win_rate": 94.8718,
+    "coin": "XMR",
+    "symbol": "XMRUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 118.7,
+    "entry_price_trader": 526.0600000000001,
+    "qty": 0.08424599831508003,
+    "opened_at": 1788600411.1794498,
+    "opened_at_iso": "2026-09-05T11:26:51+02:00"
+  },
+  {
+    "trader_id": "4941095930830452224",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4941095930830452224?timeRange=30D",
+    "trader_win_rate": 94.8718,
+    "coin": "ETH",
+    "symbol": "ETHUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 2459.99,
+    "entry_price_trader": 2479.148383838384,
+    "qty": 0.004065057175029167,
+    "opened_at": 1788601498.27353,
+    "opened_at_iso": "2026-09-05T11:44:58+02:00"
+  },
+  {
+    "trader_id": "4941095930830452224",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4941095930830452224?timeRange=30D",
+    "trader_win_rate": 94.8718,
+    "coin": "BTC",
+    "symbol": "BTCUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 79689.49,
+    "entry_price_trader": 80336.875,
+    "qty": 0.00012548706234661558,
+    "opened_at": 1788601499.1120796,
+    "opened_at_iso": "2026-09-05T11:44:59+02:00"
   }
 ]

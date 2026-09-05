@@ -110,6 +110,17 @@
     "verdict": "HELPFUL"
   },
   {
+    "trader_id": "4941095930830452224",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4941095930830452224?timeRange=30D",
+    "trades": 2,
+    "wins": 2,
+    "losses": 0,
+    "pnl_usdt": 0.0523,
+    "pnl_eur": 0.0482,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
     "trader_id": "5176945573720425984",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5176945573720425984?timeRange=30D",
     "trades": 1,
