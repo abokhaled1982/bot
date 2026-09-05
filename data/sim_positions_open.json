@@ -1,33 +1,5 @@
 [
   {
-    "trader_id": "4955446502588956417",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4955446502588956417?timeRange=30D",
-    "trader_win_rate": 94.8718,
-    "coin": "XMR",
-    "symbol": "XMRUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 118.7,
-    "entry_price_trader": 544.89,
-    "qty": 0.08424599831508003,
-    "opened_at": 1788522858.2669976,
-    "opened_at_iso": "2026-09-04T13:54:18+02:00"
-  },
-  {
-    "trader_id": "5082709428401042433",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5082709428401042433?timeRange=30D",
-    "trader_win_rate": 95.2381,
-    "coin": "AVAX",
-    "symbol": "AVAXUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 7.316,
-    "entry_price_trader": 7.467000000000002,
-    "qty": 1.366867140513942,
-    "opened_at": 1788525210.6702821,
-    "opened_at_iso": "2026-09-04T14:33:30+02:00"
-  },
-  {
     "trader_id": "5191199342167071489",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5191199342167071489?timeRange=30D",
     "trader_win_rate": 80.5556,
@@ -124,20 +96,6 @@
     "qty": 7.14847380084352,
     "opened_at": 1788553003.986571,
     "opened_at_iso": "2026-09-04T22:16:43+02:00"
-  },
-  {
-    "trader_id": "4752872648065705473",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4752872648065705473?timeRange=30D",
-    "trader_win_rate": 98.8636,
-    "coin": "DOGE",
-    "symbol": "DOGEUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 0.0847,
-    "entry_price_trader": 0.08437119386637458,
-    "qty": 118.06375442739079,
-    "opened_at": 1788553004.385472,
-    "opened_at_iso": "2026-09-04T22:16:44+02:00"
   },
   {
     "trader_id": "4954739194996961537",
@@ -292,20 +250,6 @@
     "qty": 4.302925989672978,
     "opened_at": 1788583495.9570613,
     "opened_at_iso": "2026-09-05T06:44:55+02:00"
-  },
-  {
-    "trader_id": "5199714964383563008",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?timeRange=30D",
-    "trader_win_rate": 76.4706,
-    "coin": "DOGE",
-    "symbol": "DOGEUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 0.08472,
-    "entry_price_trader": 0.08466,
-    "qty": 118.03588290840415,
-    "opened_at": 1788583496.3884609,
-    "opened_at_iso": "2026-09-05T06:44:56+02:00"
   },
   {
     "trader_id": "5139065260709835776",
@@ -588,20 +532,6 @@
     "opened_at_iso": "2026-09-05T06:46:02+02:00"
   },
   {
-    "trader_id": "3848411987859099392",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/3848411987859099392?timeRange=30D",
-    "trader_win_rate": 99.683,
-    "coin": "INJ",
-    "symbol": "INJUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 4.73,
-    "entry_price_trader": 4.810428044280442,
-    "qty": 2.1141649048625792,
-    "opened_at": 1788583565.6224089,
-    "opened_at_iso": "2026-09-05T06:46:05+02:00"
-  },
-  {
     "trader_id": "5060576518714618881",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5060576518714618881?timeRange=30D",
     "trader_win_rate": 86.6667,
@@ -627,20 +557,6 @@
     "entry_price_trader": 1.3965639534883723,
     "qty": 7.162810686913545,
     "opened_at": 1788583580.2533076,
-    "opened_at_iso": "2026-09-05T06:46:20+02:00"
-  },
-  {
-    "trader_id": "4734179394188230913",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4734179394188230913?timeRange=30D",
-    "trader_win_rate": 100.0,
-    "coin": "DOGE",
-    "symbol": "DOGEUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 0.08464,
-    "entry_price_trader": 0.08462841176470588,
-    "qty": 118.14744801512286,
-    "opened_at": 1788583580.595128,
     "opened_at_iso": "2026-09-05T06:46:20+02:00"
   },
   {
@@ -684,20 +600,6 @@
     "qty": 0.00012573869914011076,
     "opened_at": 1788583591.0975478,
     "opened_at_iso": "2026-09-05T06:46:31+02:00"
-  },
-  {
-    "trader_id": "5119261675244714753",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5119261675244714753?timeRange=30D",
-    "trader_win_rate": 98.125,
-    "coin": "XLM",
-    "symbol": "XLMUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 0.1809,
-    "entry_price_trader": 0.17909999999999998,
-    "qty": 55.2791597567717,
-    "opened_at": 1788583593.3563838,
-    "opened_at_iso": "2026-09-05T06:46:33+02:00"
   },
   {
     "trader_id": "4941095930830452224",
@@ -770,17 +672,59 @@
     "opened_at_iso": "2026-09-05T06:50:43+02:00"
   },
   {
+    "trader_id": "5041579634804156928",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5041579634804156928?timeRange=30D",
+    "trader_win_rate": 99.4872,
+    "coin": "ZEC",
+    "symbol": "ZECUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 1015.98,
+    "entry_price_trader": 1012.4100000000001,
+    "qty": 0.00984271343924093,
+    "opened_at": 1788588658.3922706,
+    "opened_at_iso": "2026-09-05T08:10:58+02:00"
+  },
+  {
+    "trader_id": "5176945573720425984",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5176945573720425984?timeRange=30D",
+    "trader_win_rate": 76.1411,
+    "coin": "ETH",
+    "symbol": "ETHUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 2459.0,
+    "entry_price_trader": 2458.31,
+    "qty": 0.004066693777958519,
+    "opened_at": 1788593999.348545,
+    "opened_at_iso": "2026-09-05T09:39:59+02:00"
+  },
+  {
     "trader_id": "5189756987442201856",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5189756987442201856?timeRange=30D",
     "trader_win_rate": 95.7282,
-    "coin": "MARSCOIN",
-    "symbol": "MARSCOINUSDT",
+    "coin": "LIT",
+    "symbol": "LITUSDT",
     "side": "LONG",
     "size_usdt": 10.0,
-    "entry_price": 0.1813,
-    "entry_price_trader": 0.18194,
-    "qty": 55.15719801434088,
-    "opened_at": 1788586079.2124546,
-    "opened_at_iso": "2026-09-05T07:27:59+02:00"
+    "entry_price": 0.743,
+    "entry_price_trader": 4.602458159722222,
+    "qty": 13.458950201884253,
+    "opened_at": 1788594284.6389074,
+    "opened_at_iso": "2026-09-05T09:44:44+02:00"
+  },
+  {
+    "trader_id": "5197190233944063233",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5197190233944063233?timeRange=30D",
+    "trader_win_rate": 90.9091,
+    "coin": "TAO",
+    "symbol": "TAOUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 234.0,
+    "entry_price_trader": 227.84352499999997,
+    "qty": 0.042735042735042736,
+    "opened_at": 1788594811.9753792,
+    "opened_at_iso": "2026-09-05T09:53:31+02:00"
   }
 ]
