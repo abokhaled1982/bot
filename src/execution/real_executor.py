@@ -30,7 +30,12 @@ from decimal import Decimal, ROUND_DOWN
 from typing import Any, Optional
 
 import requests
+from dotenv import load_dotenv
 from loguru import logger
+
+# .env aus dem Repo-Root laden, damit die Config unabhaengig vom Startverzeichnis
+# und vom Entry-Point gesetzt ist. Bereits gesetzte Umgebungsvariablen gewinnen.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".env"))
 
 # ── Config ────────────────────────────────────────────────────────────────────
 API_KEY    = os.getenv("BINANCE_API_KEY", "")
