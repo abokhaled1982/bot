@@ -1,1 +1,15 @@
-[]
+[
+  {
+    "wallet": "5041579634804156928",
+    "size_usdt": 30.0,
+    "is_copied": 1,
+    "is_focus": 0,
+    "note": "",
+    "source": "dashboard",
+    "account_usd": 0.0,
+    "win_rate": 0.0,
+    "trades": 0,
+    "added_at": 1788715088.12355,
+    "updated_at": 1788715088.1346185
+  }
+]

@@ -13,5 +13,20 @@
     "client_id": "copy_c98c21b8961714a3",
     "opened_at": 1788704212.328322,
     "opened_at_iso": "2026-09-06T16:16:52+02:00"
+  },
+  {
+    "trader_id": "5041579634804156928",
+    "trader_win_rate": 0.0,
+    "coin": "BTC",
+    "symbol": "BTCUSDT",
+    "side": "LONG",
+    "size_usdt": 29.557339,
+    "entry_price": 79884.7,
+    "entry_price_trader": 79884.7,
+    "qty": 0.00037,
+    "order_id": "DRY_1788715092",
+    "client_id": "copy_a3d5fd4f5c900655",
+    "opened_at": 1788715092.6093087,
+    "opened_at_iso": "2026-09-06T19:18:12+02:00"
   }
 ]
