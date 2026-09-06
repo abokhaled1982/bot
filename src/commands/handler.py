@@ -26,6 +26,7 @@ Kommandos (fuehrendes `/` oder `!` optional, case-insensitive):
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Callable, Optional
 
@@ -33,6 +34,7 @@ from loguru import logger
 
 STOP_FILE = "STOP_BOT"
 QUOTE_ASSET = os.getenv("QUOTE_ASSET", "USDT").strip().upper() or "USDT"
+SIM_STATS_FILE = os.getenv("SIM_STATS_FILE", "data/sim_trader_stats.json")
 
 # Callback-Typen
 OpenManualFn  = Callable[[str, str, float, str, float], str]  # (coin, sym, usdt, trader, wr) -> msg
@@ -51,6 +53,7 @@ HELP_TEXT = (
     "  /balance [ASSET]               Guthaben (Default USDT)\n"
     "  /positions                     Offene Positionen\n"
     "  /traders [N]                   Top-N Trader nach PnL\n"
+    "  /simtop [N]                    Top-N Sim-Trader (data/sim_trader_stats.json)\n"
     "  /price <COIN>                  Marktpreis\n"
     "  /buy <COIN> <USDT>             Direkter Kauf (Tag: MANUAL)\n"
     "  /sell <COIN>                   MANUAL-Position schliessen\n"
@@ -203,6 +206,36 @@ class CommandHandler:
                 f"  · {_short(row['uid'])}  {row['pnl']:+.2f}$  "
                 f"({row['n']}t, {wr:.0f}% wins)"
             )
+        return "\n".join(lines)
+
+    def cmd_simtop(self, argv: list[str]) -> str:
+        try:
+            n = int(argv[0]) if argv else 5
+        except ValueError:
+            n = 5
+        n = max(1, min(n, 50))
+        try:
+            with open(SIM_STATS_FILE, encoding="utf-8") as fh:
+                rows = json.load(fh)
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
+            return f"❌ Sim-Stats nicht lesbar ({SIM_STATS_FILE}): {e}"
+        if not isinstance(rows, list) or not rows:
+            return "📊 Sim-Stats leer"
+        rows = sorted(
+            (r for r in rows if isinstance(r, dict)),
+            key=lambda r: float(r.get("pnl_usdt") or 0), reverse=True,
+        )[:n]
+        lines = [f"🏆 Sim-Top {len(rows)} (nach PnL USDT):"]
+        for i, r in enumerate(rows, 1):
+            uid = str(r.get("trader_id") or "")
+            pnl = float(r.get("pnl_usdt") or 0)
+            wr  = float(r.get("win_rate") or 0)
+            tr  = int(r.get("trades") or 0)
+            v   = str(r.get("verdict") or "")
+            lines.append(
+                f"  {i}. {_short(uid)}  {pnl:+.2f}$  WR {wr:.0f}%  ({tr}t)  [{v}]"
+            )
+        lines.append("→ zum Kopieren: /follow <TRADER_ID> <USDT>")
         return "\n".join(lines)
 
     def cmd_price(self, argv: list[str]) -> str:
