@@ -200,7 +200,7 @@ start_bridge() {
     info "Starte Bridge auf Port $BRIDGE_PORT → Log: $BRIDGE_LOG"
     (
         cd "$BRIDGE_DIR"
-        PORT="$BRIDGE_PORT" WEBHOOK_URL="$WEBHOOK_URL" \
+        BRIDGE_PORT="$BRIDGE_PORT" WEBHOOK_URL="$WEBHOOK_URL" \
             nohup node server.js >>"$BRIDGE_LOG" 2>&1 &
         echo $! > "$BRIDGE_PID_FILE"
     )
@@ -228,8 +228,8 @@ start_bot() {
         cd "$REPO_ROOT"
         WHATSAPP_BRIDGE_URL="$BRIDGE_URL" \
         WHATSAPP_TO="$WHATSAPP_TO" \
-        LIVE_WEBHOOK_PORT="$CMD_PORT" \
-        nohup "$VENV_PY" -u live_copytrader.py "${BOT_ARGS[@]}" \
+        nohup "$VENV_PY" -u live_copytrader.py \
+            --webhook-port "$CMD_PORT" "${BOT_ARGS[@]}" \
             >>"$BOT_LOG" 2>&1 &
         echo $! > "$BOT_PID_FILE"
     )
@@ -262,23 +262,24 @@ cmd_start() {
 }
 
 cmd_stop() {
+    load_ports
     stop_one "$BOT_PID_FILE"    "Bot"    "python.* live_copytrader\\.py"
     stop_one "$BRIDGE_PID_FILE" "Bridge" "node .*server\\.js"
-    free_port "$BRIDGE_PORT" "Bridge"    || true
-    free_port "$CMD_PORT"    "Cmd-Webhook" || true
+    rm -f "$PORTS_FILE"
 }
 
 cmd_restart() { cmd_stop; sleep 0.5; cmd_start; }
 
 cmd_status() {
+    load_ports
     local bp
     bp=$(read_pid "$BRIDGE_PID_FILE")
-    if pid_alive "$bp"; then ok "Bridge: laeuft (PID $bp)"
+    if pid_alive "$bp"; then ok "Bridge: laeuft (PID $bp, Port $BRIDGE_PORT)"
     else                     warn "Bridge: aus"; fi
 
     local otp
     otp=$(read_pid "$BOT_PID_FILE")
-    if pid_alive "$otp"; then ok "Bot:    laeuft (PID $otp)"
+    if pid_alive "$otp"; then ok "Bot:    laeuft (PID $otp, Cmd-Port $CMD_PORT)"
     else                      warn "Bot:    aus"; fi
 
     printf '  Ports: '
