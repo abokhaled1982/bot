@@ -341,6 +341,22 @@ def get_account_balance(asset: str = "USDT") -> float:
     return 0.0
 
 
+def get_all_balances() -> dict[str, float]:
+    """Alle gehaltenen Assets (free+locked > 0), nicht nur QUOTE_ASSET."""
+    out: dict[str, float] = {}
+    try:
+        data = _request("GET", "/api/v3/account", signed=True)
+        for b in data.get("balances", []):
+            total = float(b.get("free", 0)) + float(b.get("locked", 0))
+            if total > 0:
+                out[b["asset"]] = total
+    except BinanceAPIError as e:
+        logger.error(f"[EXEC] balances API-error: {e}")
+    except Exception as e:
+        logger.error(f"[EXEC] balances error: {e}")
+    return out
+
+
 def get_price(symbol: str) -> float | None:
     try:
         data = _request("GET", "/api/v3/ticker/price", {"symbol": symbol}, retries=2)

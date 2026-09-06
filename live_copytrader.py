@@ -438,6 +438,13 @@ def _cmd_get_balance(asset: str) -> float:
         return 0.0
 
 
+def _cmd_get_all_balances() -> dict[str, float]:
+    try:
+        return ex.get_all_balances()
+    except Exception:
+        return {}
+
+
 def info_base(symbol: str) -> str:
     return symbol.replace("USDT", "").replace("USD", "").replace("BUSD", "")
 
@@ -547,6 +554,8 @@ async def run(args: argparse.Namespace) -> None:
         default_size_usdt=args.size_usdt,
         follow_trader=lambda trader, usdt: _follow_trader(trader, usdt, monitor=monitor),
         unfollow_trader=lambda trader: _unfollow_trader(trader, monitor=monitor),
+        get_all_balances=_cmd_get_all_balances,
+        trader_focus=monitor.trader_focus,
     )
     webhook = None
     if args.webhook_port > 0:

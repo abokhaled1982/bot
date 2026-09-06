@@ -10,8 +10,10 @@ Kommandos (fuehrendes `/` oder `!` optional, case-insensitive):
   help                             Diese Uebersicht
   status                           Balance, offene Positionen, PnL heute
   balance [ASSET]                  Binance-Guthaben (Default USDT)
+  coins                            Alle gehaltenen Coins (nicht nur USDT)
   positions                        Offene Positionen auflisten
   traders [N]                      Top-N Trader nach realisiertem PnL
+  trader <ID>                      Status eines Traders: Position + letzte Records
   price <COIN>                     Aktueller Marktpreis
   buy <COIN> <USDT>                Direkter Kauf, Position-Tag "MANUAL"
   sell <COIN>                      MANUAL-Position auf COIN schliessen
@@ -41,6 +43,8 @@ OpenManualFn  = Callable[[str, str, float, str, float], str]  # (coin, sym, usdt
 ClosePosFn    = Callable[[str, Optional[str], str], str]      # (coin, trader?, reason) -> msg
 PriceFn       = Callable[[str], Optional[float]]
 BalanceFn     = Callable[[str], float]
+AllBalancesFn = Callable[[], dict[str, float]]
+TraderFocusFn = Callable[[str], Optional[dict]]
 StateProvider = Callable[[], dict]
 TradersProv   = Callable[[], dict]
 FollowFn      = Callable[[str, float], str]   # (trader, usdt) -> msg
@@ -51,8 +55,10 @@ HELP_TEXT = (
     "🤖 Copy-Trader — Kommandos:\n"
     "  /status                        Balance, offene Positionen, PnL heute\n"
     "  /balance [ASSET]               Guthaben (Default USDT)\n"
+    "  /coins                         Alle gehaltenen Coins (nicht nur USDT)\n"
     "  /positions                     Offene Positionen\n"
     "  /traders [N]                   Top-N Trader nach PnL\n"
+    "  /trader <ID>                   Status eines Traders (Position + Records)\n"
     "  /simtop [N]                    Top-N Sim-Trader (data/sim_trader_stats.json)\n"
     "  /price <COIN>                  Marktpreis\n"
     "  /buy <COIN> <USDT>             Direkter Kauf (Tag: MANUAL)\n"
@@ -101,6 +107,8 @@ class CommandHandler:
         default_size_usdt: float,
         follow_trader: Optional[FollowFn] = None,
         unfollow_trader: Optional[UnfollowFn] = None,
+        get_all_balances: Optional[AllBalancesFn] = None,
+        trader_focus: Optional[TraderFocusFn] = None,
     ) -> None:
         self._state = state_provider
         self._traders = traders_provider
@@ -111,6 +119,8 @@ class CommandHandler:
         self._default_size = float(default_size_usdt)
         self._follow = follow_trader
         self._unfollow = unfollow_trader
+        self._all_balances = get_all_balances
+        self._trader_focus = trader_focus
 
     # ── Dispatcher ────────────────────────────────────────────────────────────
     def dispatch(self, text: str, source: str = "console") -> str:
@@ -156,6 +166,17 @@ class CommandHandler:
         asset = (argv[0].upper() if argv else QUOTE_ASSET)
         bal = self._balance(asset)
         return f"💰 {asset}: {bal:.6f}"
+
+    def cmd_coins(self, _argv: list[str]) -> str:
+        if self._all_balances is None:
+            return "❌ /coins ist in diesem Modus nicht verfuegbar."
+        balances = self._all_balances()
+        if not balances:
+            return "📭 keine Guthaben gefunden"
+        lines = ["💰 Gehaltene Coins:"]
+        for asset, amount in sorted(balances.items(), key=lambda kv: kv[0]):
+            lines.append(f"  · {asset}: {amount:.6f}")
+        return "\n".join(lines)
 
     def cmd_positions(self, _argv: list[str]) -> str:
         positions = self._state().get("positions", [])
@@ -237,6 +258,66 @@ class CommandHandler:
                 f"WR {wr:.0f}%  ({tr}t)  [{v}]"
             )
         lines.append("→ zum Kopieren: /follow <TRADER_ID> <USDT>")
+        return "\n".join(lines)
+
+    def cmd_trader(self, argv: list[str]) -> str:
+        if not argv:
+            return "Nutzung: /trader <TRADER_ID>"
+        uid = argv[0].strip()
+        st = self._state()
+        followed = self._traders()
+        lines = [f"👤 Trader {_short(uid)}"]
+        if uid in followed:
+            lines.append(f"Abonniert: ${float(followed[uid]):.2f}/Trade")
+
+        # Echte Binance-Live-Positionen (aus dem gepollten Leaderboard, nicht unsere Copy-Trades)
+        focus = self._trader_focus(uid) if self._trader_focus else None
+        if focus is None:
+            lines.append("⚠️ Binance-Live-Daten nicht verfuegbar (Adapter nicht verdrahtet)")
+        else:
+            bn_positions = focus.get("positions") or {}
+            if not bn_positions:
+                lines.append("Binance-Position: keine offene")
+            else:
+                lines.append("Binance-Position (live, aus Leaderboard-Polling):")
+                for coin, p in bn_positions.items():
+                    size = float(p.get("size") or 0)
+                    entry = float(p.get("entry_px") or 0)
+                    lev = float(p.get("leverage") or 1)
+                    pnl_pct = float(p.get("pnl_pct") or 0)
+                    upnl = float(p.get("unrealized_pnl") or 0)
+                    value = float(p.get("value_usd") or 0)
+                    side = "LONG" if size >= 0 else "SHORT"
+                    lines.append(
+                        f"  · {coin} {side}  ${value:.2f}  @ ${entry:.6f}  "
+                        f"{lev:.0f}x  uPnL {upnl:+.2f}$ ({pnl_pct:+.2f}%)"
+                    )
+
+        # Unsere eigenen Copy-Trades (lokale Historie)
+        positions = [p for p in st.get("positions", []) if p.get("trader_id") == uid]
+        history = [h for h in st.get("history", []) if h.get("trader_id") == uid]
+        if positions:
+            lines.append("Unsere Copy-Position(en):")
+            for p in positions:
+                coin = p.get("coin", "?")
+                entry = float(p.get("entry_price") or 0)
+                size = float(p.get("size_usdt") or 0)
+                qty = float(p.get("qty") or 0)
+                live = self._price(p.get("symbol") or _symbol_for(coin))
+                pnl_str = ""
+                if live and entry > 0:
+                    pnl_usdt = (live - entry) * qty
+                    pnl_pct = (live / entry - 1) * 100
+                    pnl_str = f" | uPnL {pnl_usdt:+.2f}$ ({pnl_pct:+.2f}%)"
+                lines.append(f"  · {coin}  ${size:.2f}  @ ${entry:.6f}{pnl_str}")
+        last = sorted(history, key=lambda h: h.get("closed_at_iso") or "", reverse=True)[:5]
+        if last:
+            lines.append("Unsere letzten Copy-Records:")
+            for h in last:
+                coin = h.get("coin", "?")
+                pnl = float(h.get("pnl_usdt") or 0)
+                closed = h.get("closed_at_iso") or "?"
+                lines.append(f"  · {coin}  {pnl:+.2f}$  ({closed})")
         return "\n".join(lines)
 
     def cmd_price(self, argv: list[str]) -> str:

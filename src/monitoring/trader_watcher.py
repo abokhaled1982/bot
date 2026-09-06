@@ -83,3 +83,7 @@ class CopyTraderMonitor:
     def followed(self) -> dict[str, float]:
         """Alle abonnierten Trader mit ihrem jeweiligen Copy-Betrag (USDT)."""
         return self._adapter.get_followed()
+
+    def trader_focus(self, trader_id: str) -> Optional[dict]:
+        """Live von Binance gepollte Positionen dieses Traders (nicht unsere Copy-Trades)."""
+        return self._adapter.get_trader_focus(trader_id)
