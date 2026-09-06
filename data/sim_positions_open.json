@@ -490,20 +490,6 @@
     "opened_at_iso": "2026-09-05T14:52:36+02:00"
   },
   {
-    "trader_id": "5186894299357091329",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5186894299357091329?timeRange=30D",
-    "trader_win_rate": 80.0,
-    "coin": "DOGE",
-    "symbol": "DOGEUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 0.09235,
-    "entry_price_trader": 0.09268,
-    "qty": 108.28370330265295,
-    "opened_at": 1788633533.2715058,
-    "opened_at_iso": "2026-09-05T20:38:53+02:00"
-  },
-  {
     "trader_id": "5170833928858686464",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5170833928858686464?timeRange=30D",
     "trader_win_rate": 97.2973,
@@ -558,20 +544,6 @@
     "qty": 42.86326618088298,
     "opened_at": 1788668050.1499426,
     "opened_at_iso": "2026-09-06T06:14:10+02:00"
-  },
-  {
-    "trader_id": "5041579634804156928",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5041579634804156928?timeRange=30D",
-    "trader_win_rate": 99.4872,
-    "coin": "UNI",
-    "symbol": "UNIUSDT",
-    "side": "LONG",
-    "size_usdt": 10.0,
-    "entry_price": 7.075,
-    "entry_price_trader": 7.098000000000001,
-    "qty": 1.4134275618374559,
-    "opened_at": 1788669696.8263054,
-    "opened_at_iso": "2026-09-06T06:41:36+02:00"
   },
   {
     "trader_id": "5176692031499906560",
@@ -642,5 +614,33 @@
     "qty": 60.27727546714889,
     "opened_at": 1788681843.6846633,
     "opened_at_iso": "2026-09-06T10:04:03+02:00"
+  },
+  {
+    "trader_id": "5119261675244714753",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5119261675244714753?timeRange=30D",
+    "trader_win_rate": 98.125,
+    "coin": "PEPE",
+    "symbol": "PEPEUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 3.63e-06,
+    "entry_price_trader": 0.0036307180186823996,
+    "qty": 2754820.9366391185,
+    "opened_at": 1788690054.7578835,
+    "opened_at_iso": "2026-09-06T12:20:54+02:00"
+  },
+  {
+    "trader_id": "5199714964383563008",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5199714964383563008?timeRange=30D",
+    "trader_win_rate": 76.4706,
+    "coin": "MOVR",
+    "symbol": "MOVRUSDT",
+    "side": "LONG",
+    "size_usdt": 10.0,
+    "entry_price": 0.814,
+    "entry_price_trader": 0.8145111339031338,
+    "qty": 12.285012285012286,
+    "opened_at": 1788695236.5197089,
+    "opened_at_iso": "2026-09-06T13:47:16+02:00"
   }
 ]
