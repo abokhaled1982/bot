@@ -45,3 +45,14 @@ trader>
 
 18:08:55 | INFO    | [INIT] Kein Trader ausgewaehlt
 18:09:11 | INFO    | [CMD:wa:120363429746] 'Status'
+
+cd ~/bot
+source .venv/bin/activate         # oder was du auf dem ODROID nutzt
+WHATSAPP_BRIDGE_URL=http://127.0.0.1:3000 \
+WHATSAPP_TO=120363429746414084@g.us \
+python3 live_copytrader.py --status-interval 0
+
+
+cd ~/bot/whatsapp_bridge
+WEBHOOK_URL="http://127.0.0.1:3100/wa" node server.js
+# warten bis: [BRIDGE] ready ✔
