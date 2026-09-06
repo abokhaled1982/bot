@@ -2,9 +2,11 @@
 """
 live_copytrader.py — Live-Copy-Trader mit WhatsApp-Benachrichtigung.
 
-Baut auf denselben Signal-Adapter wie `simulate_copytrader.py`, ersetzt aber
-die Paper-Buchhaltung durch echte Orders via `src.execution.real_executor`
-und schickt jedes Event ueber `src.notifications.WhatsAppNotifier` raus.
+Ueberwachung laeuft ueber `src.monitoring.CopyTraderMonitor` (siehe dort fuer
+die Schnittstelle) — denselben Signal-Adapter wie `simulate_copytrader.py`.
+Dieses Skript ersetzt die Paper-Buchhaltung durch echte Orders via
+`src.execution.real_executor` und schickt jedes Event ueber
+`src.notifications.WhatsAppNotifier` raus.
 
 Trader-Auswahl:  data/traders_export.json  (is_copied=1 UND win_rate>=--min-win-rate)
 Positionen:      data/live_positions_open.json / live_positions_closed.json
@@ -52,12 +54,10 @@ load_dotenv(os.path.join(_REPO_ROOT, ".env"))
 os.environ.setdefault("BNLB_AUTO_DISCOVER", "False")
 os.environ.setdefault("BNLB_EMIT_AUTO_SIGNALS", "True")
 
-from src.adapters.binance_leaderboard import (  # noqa: E402
-    BinanceLeaderboardTrader, CopySignal,
-)
 from src.commands import (  # noqa: E402
     CommandHandler, CommandWebhookServer, ConsoleREPL,
 )
+from src.monitoring import CopySignal, CopyTraderMonitor  # noqa: E402
 from src.commands.handler import QUOTE_ASSET  # noqa: E402
 from src.commands.server import default_webhook_token  # noqa: E402
 from src.execution import real_executor as ex  # noqa: E402
@@ -195,7 +195,7 @@ def _blocked_reason(state: dict, args: argparse.Namespace) -> str:
 # ── Signal-Handler ────────────────────────────────────────────────────────────
 def _handle_open(
     sig: CopySignal, state: dict,
-    args: argparse.Namespace, notifier, adapter,
+    args: argparse.Namespace, notifier, monitor: CopyTraderMonitor,
 ) -> bool:
     # Ein Trader darf gleichzeitig nur EINE Position haben (ueber alle Coins) —
     # neue Signale dieses Traders werden ignoriert, solange eine offene Position
@@ -211,7 +211,7 @@ def _handle_open(
         notifier.send(f"⛔ OPEN {sig.coin} geblockt: {reason}")
         return False
 
-    size_usdt = adapter.get_copy_size(sig.trader) or args.size_usdt
+    size_usdt = monitor.copy_size(sig.trader) or args.size_usdt
 
     # Im DRY_RUN werden keine echten Mittel bewegt — der reale Kontostand
     # soll Mock-Tests nicht blocken.
@@ -317,23 +317,22 @@ def _handle_close(
 
 
 # ── Manuelle Aktionen (Kommandos) ─────────────────────────────────────────────
-def _follow_trader(trader_id: str, usdt: float, *, adapter: BinanceLeaderboardTrader) -> str:
+def _follow_trader(trader_id: str, usdt: float, *, monitor: CopyTraderMonitor) -> str:
     trader_id = trader_id.strip()
     if not trader_id:
         return "Trader-ID fehlt — Nutzung: /follow <TRADER_ID> <BETRAG_USDT>"
-    adapter.activate_wallet(trader_id)
-    adapter.set_copy_size(trader_id, usdt)
+    monitor.follow(trader_id, usdt)
     return (f"✅ Trader {trader_id} abonniert — ${usdt:.2f}/Trade. "
             f"Seine naechste frische Position wird kopiert (max. 1 gleichzeitig).")
 
 
-def _unfollow_trader(trader_id: str, *, adapter: BinanceLeaderboardTrader) -> str:
+def _unfollow_trader(trader_id: str, *, monitor: CopyTraderMonitor) -> str:
     trader_id = trader_id.strip()
     if not trader_id:
         return "Trader-ID fehlt — Nutzung: /unfollow <TRADER_ID>"
-    if trader_id not in adapter.get_followed():
+    if trader_id not in monitor.followed():
         return f"ℹ️ Trader {trader_id} ist nicht abonniert."
-    adapter.deactivate_wallet(trader_id)
+    monitor.unfollow(trader_id)
     return (f"🛑 Trader {trader_id} deabonniert. "
             f"Eine bereits offene Position (falls vorhanden) laeuft unveraendert weiter.")
 
@@ -456,15 +455,14 @@ def _quote_asset_for(symbol: str) -> str:
 
 
 # ── Async-Loops ───────────────────────────────────────────────────────────────
-async def _signal_loop(adapter: BinanceLeaderboardTrader, state, args, notifier) -> None:
-    while True:
-        sig: CopySignal = await adapter.signal_queue.get()
-        if not adapter.is_copied(sig.trader):
+async def _signal_loop(monitor: CopyTraderMonitor, state, args, notifier) -> None:
+    async for sig in monitor.signals():
+        if not monitor.is_following(sig.trader):
             continue
         changed = False
         if sig.signal == "COPY_OPEN_LONG":
             changed = await asyncio.to_thread(
-                _handle_open, sig, state, args, notifier, adapter,
+                _handle_open, sig, state, args, notifier, monitor,
             )
         elif sig.signal == "COPY_CLOSE_LONG":
             changed = await asyncio.to_thread(
@@ -528,14 +526,14 @@ async def run(args: argparse.Namespace) -> None:
     logger.info(f"[LIVE] Balance: ${balance:.2f} {QUOTE_ASSET}")
     notifier.send(f"🤖 Copy-Trader gestartet ({mode})\nBalance: ${balance:.2f} {QUOTE_ASSET}")
 
-    adapter = BinanceLeaderboardTrader(publish_state=False)
-    adapter.set_poll_interval(args.poll_interval)
-    adapter.set_min_copy_size(args.min_copy_size_usd)
+    monitor = CopyTraderMonitor(
+        poll_interval=args.poll_interval, min_copy_size_usd=args.min_copy_size_usd,
+    )
     logger.info("[LIVE] Kein Auto-Copy — nur manuell per /follow abonnierte Trader werden kopiert.")
 
     cmd_handler = CommandHandler(
         state_provider=lambda: state,
-        traders_provider=adapter.get_followed,
+        traders_provider=monitor.followed,
         open_manual=lambda coin, sym, usdt, trader, wr: _open_manual(
             coin, sym, usdt, trader, wr,
             state=state, args=args, notifier=notifier,
@@ -547,8 +545,8 @@ async def run(args: argparse.Namespace) -> None:
         get_price=_cmd_get_price,
         get_balance=_cmd_get_balance,
         default_size_usdt=args.size_usdt,
-        follow_trader=lambda trader, usdt: _follow_trader(trader, usdt, adapter=adapter),
-        unfollow_trader=lambda trader: _unfollow_trader(trader, adapter=adapter),
+        follow_trader=lambda trader, usdt: _follow_trader(trader, usdt, monitor=monitor),
+        unfollow_trader=lambda trader: _unfollow_trader(trader, monitor=monitor),
     )
     webhook = None
     if args.webhook_port > 0:
@@ -568,8 +566,8 @@ async def run(args: argparse.Namespace) -> None:
         repl.start()
 
     tasks = [
-        asyncio.create_task(adapter.start()),
-        asyncio.create_task(_signal_loop(adapter, state, args, notifier)),
+        asyncio.create_task(monitor.start()),
+        asyncio.create_task(_signal_loop(monitor, state, args, notifier)),
     ]
     if args.status_interval > 0:
         tasks.append(asyncio.create_task(
