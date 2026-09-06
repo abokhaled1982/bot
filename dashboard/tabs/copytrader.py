@@ -183,7 +183,7 @@ def _default_size() -> float:
 # ── Format-Helpers ───────────────────────────────────────────────────────────
 
 def _short(wallet: str) -> str:
-    return f"{wallet[:6]}...{wallet[-4:]}" if len(wallet) > 12 else wallet
+    return wallet
 
 
 def _fmt_hold(sec: float) -> str:
