@@ -13,8 +13,10 @@ VENV_PY="$REPO_ROOT/.venv/bin/python"
 LOG_DIR="$REPO_ROOT/logs"
 BRIDGE_DIR="$REPO_ROOT/whatsapp_bridge"
 
-BRIDGE_PORT=3000
-CMD_PORT=3100
+BRIDGE_PORT_DEFAULT=3000
+CMD_PORT_DEFAULT=3100
+BRIDGE_PORT=$BRIDGE_PORT_DEFAULT
+CMD_PORT=$CMD_PORT_DEFAULT
 BRIDGE_URL="http://127.0.0.1:${BRIDGE_PORT}"
 WEBHOOK_URL="http://127.0.0.1:${CMD_PORT}/wa"
 
@@ -28,6 +30,7 @@ BRIDGE_PID_FILE="$LOG_DIR/bridge.pid"
 BOT_PID_FILE="$LOG_DIR/bot.pid"
 BRIDGE_LOG="$LOG_DIR/bridge.log"
 BOT_LOG="$LOG_DIR/bot.log"
+PORTS_FILE="$LOG_DIR/ports.env"
 
 mkdir -p "$LOG_DIR"
 
@@ -51,6 +54,18 @@ pids_on_port() {
     # PIDs der Prozesse, die auf $1 lauschen — ohne fuser/lsof
     ss -ltnpH "sport = :$1" 2>/dev/null \
         | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
+}
+
+pick_free_port() {
+    # Ab $1 aufwaerts den ersten freien Port suchen (max. 20 Versuche).
+    local start=$1 tries=${2:-20} i p
+    for i in $(seq 0 $((tries-1))); do
+        p=$((start+i))
+        if ! port_in_use "$p"; then
+            printf '%s' "$p"; return 0
+        fi
+    done
+    return 1
 }
 
 kill_pid_tree() {
