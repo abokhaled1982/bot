@@ -2,12 +2,12 @@
   {
     "trader_id": "5189756987442201856",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5189756987442201856?timeRange=30D",
-    "trades": 11,
-    "wins": 9,
-    "losses": 1,
-    "pnl_usdt": 1.4686,
-    "pnl_eur": 1.3512,
-    "win_rate": 81.82,
+    "trades": 14,
+    "wins": 11,
+    "losses": 2,
+    "pnl_usdt": 1.5056,
+    "pnl_eur": 1.3852,
+    "win_rate": 78.57,
     "verdict": "HELPFUL"
   },
   {
@@ -33,6 +33,28 @@
     "verdict": "HELPFUL"
   },
   {
+    "trader_id": "5041579634804156928",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5041579634804156928?timeRange=30D",
+    "trades": 3,
+    "wins": 3,
+    "losses": 0,
+    "pnl_usdt": 0.2902,
+    "pnl_eur": 0.267,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5076675921060229632",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5076675921060229632?timeRange=30D",
+    "trades": 2,
+    "wins": 2,
+    "losses": 0,
+    "pnl_usdt": 0.2641,
+    "pnl_eur": 0.243,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
     "trader_id": "5197190233944063233",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5197190233944063233?timeRange=30D",
     "trades": 1,
@@ -44,13 +66,13 @@
     "verdict": "HELPFUL"
   },
   {
-    "trader_id": "5041579634804156928",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5041579634804156928?timeRange=30D",
-    "trades": 2,
-    "wins": 2,
+    "trader_id": "4941095930830452224",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4941095930830452224?timeRange=30D",
+    "trades": 3,
+    "wins": 3,
     "losses": 0,
-    "pnl_usdt": 0.2196,
-    "pnl_eur": 0.202,
+    "pnl_usdt": 0.2294,
+    "pnl_eur": 0.2111,
     "win_rate": 100.0,
     "verdict": "HELPFUL"
   },
@@ -176,17 +198,6 @@
     "verdict": "HELPFUL"
   },
   {
-    "trader_id": "4941095930830452224",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4941095930830452224?timeRange=30D",
-    "trades": 2,
-    "wins": 2,
-    "losses": 0,
-    "pnl_usdt": 0.0523,
-    "pnl_eur": 0.0482,
-    "win_rate": 100.0,
-    "verdict": "HELPFUL"
-  },
-  {
     "trader_id": "4977139794479123713",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4977139794479123713?timeRange=30D",
     "trades": 1,
@@ -198,20 +209,9 @@
     "verdict": "HELPFUL"
   },
   {
-    "trader_id": "5201671754533737473",
-    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5201671754533737473?timeRange=30D",
-    "trades": 3,
-    "wins": 2,
-    "losses": 1,
-    "pnl_usdt": 0.0065,
-    "pnl_eur": 0.006,
-    "win_rate": 66.67,
-    "verdict": "HELPFUL"
-  },
-  {
     "trader_id": "4955446502588956417",
     "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4955446502588956417?timeRange=30D",
-    "trades": 2,
+    "trades": 3,
     "wins": 0,
     "losses": 0,
     "pnl_usdt": 0.0,
@@ -239,6 +239,17 @@
     "pnl_usdt": -0.0282,
     "pnl_eur": -0.0259,
     "win_rate": 0.0,
+    "verdict": "HURTFUL"
+  },
+  {
+    "trader_id": "5201671754533737473",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5201671754533737473?timeRange=30D",
+    "trades": 4,
+    "wins": 2,
+    "losses": 2,
+    "pnl_usdt": -0.1338,
+    "pnl_eur": -0.1231,
+    "win_rate": 50.0,
     "verdict": "HURTFUL"
   }
 ]
