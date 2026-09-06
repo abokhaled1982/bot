@@ -86,7 +86,7 @@ def _symbol_for(coin: str) -> str:
 
 
 def _short(uid: str, n: int = 8) -> str:
-    return uid if len(uid) <= n else f"{uid[:n]}…"
+    return uid
 
 
 class CommandHandler:
@@ -233,7 +233,8 @@ class CommandHandler:
             tr  = int(r.get("trades") or 0)
             v   = str(r.get("verdict") or "")
             lines.append(
-                f"  {i}. {_short(uid)}  {pnl:+.2f}$  WR {wr:.0f}%  ({tr}t)  [{v}]"
+                f'  {i}. trader_id: "{uid}"  {pnl:+.2f}$  '
+                f"WR {wr:.0f}%  ({tr}t)  [{v}]"
             )
         lines.append("→ zum Kopieren: /follow <TRADER_ID> <USDT>")
         return "\n".join(lines)
