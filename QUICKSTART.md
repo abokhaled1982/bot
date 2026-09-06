@@ -156,3 +156,74 @@ Beenden mit `Ctrl+C`.
 5. Nach ein paar Tagen `sim_trader_stats.json` prüfen – Trader mit
    `verdict = HELPFUL` und positivem `pnl_eur` sind Kandidaten zum echten
    Kopieren.
+
+---
+
+## 4. WhatsApp-Bridge + `live_copytrader.py` (echtes Geld / DRY_RUN)
+
+Anders als die drei Skripte oben braucht dieser Teil einen Binance-API-Key
+(`BINANCE_API_KEY` / `BINANCE_SECRET` in `.env`) und startet **zwei separate
+Prozesse**, die parallel laufen müssen: die Node-Bridge (WhatsApp) und der
+Python-Bot (Trading-Logik + Kommandos).
+
+### Schritt 1 — WhatsApp-Bridge starten (Terminal 1)
+
+```bash
+cd whatsapp_bridge
+WEBHOOK_URL="http://127.0.0.1:3100/wa" node server.js
+```
+
+Beim allerersten Start erscheint ein QR-Code — in WhatsApp unter
+**Einstellungen → Verknüpfte Geräte → Gerät verknüpfen** scannen. Danach
+bleibt die Session in `.wwebjs_auth/` gespeichert (kein erneutes Scannen
+nötig, auch nach Neustart).
+
+`WEBHOOK_URL` ist entscheidend: ohne sie leitet die Bridge eingehende
+WhatsApp-Nachrichten nicht an Python weiter, und Befehle wie `/buy` kommen
+nie an.
+
+### Schritt 2 — Bot starten (Terminal 2, venv aktiviert)
+
+```bash
+source .venv/bin/activate
+set -a && source .env && set +a
+python3 live_copytrader.py --status-interval 0
+```
+
+Ohne `--no-repl` bekommst du zusätzlich eine Konsole (`trader>`), in der
+dieselben Befehle wie in WhatsApp funktionieren — nützlich zum Testen ohne
+Handy. Für Dauerbetrieb im Hintergrund `--no-repl` anhängen und z. B. mit
+`nohup ... & disown` starten.
+
+### Bedienung über WhatsApp (Gruppe **"bot"**)
+
+| Befehl | Wirkung |
+|---|---|
+| `follow <TRADER_ID> <BETRAG>` | Trader abonnieren, kopiert dessen nächste frische Position mit `<BETRAG>` |
+| `unfollow <TRADER_ID>` | Trader deabonnieren (offene Position läuft weiter) |
+| `following` | Abonnierte Trader + Betrag + Status |
+| `buy <COIN> <BETRAG>` | Direkter Kauf ohne Trader (Tag "MANUAL") |
+| `sell <COIN>` | MANUAL-Position schliessen |
+| `status` | Balance, offene Positionen, PnL, abonnierte Trader |
+| `positions` | Offene Positionen im Detail |
+| `stop` / `resume` | Neue Opens blockieren / wieder erlauben |
+| `help` | Vollständige Befehlsliste |
+
+### Wichtige `.env`-Variablen
+
+| Variable | Bedeutung |
+|---|---|
+| `DRY_RUN` | `True` = alle Käufe simuliert, keine echten Orders. `False` = echtes Geld! |
+| `QUOTE_ASSET` | Standard-Handelswährung für `buy`/`copy` ohne explizites Paar (Default `USDT`, hier `USDC`) |
+| `WHATSAPP_BRIDGE_URL` | Default `http://127.0.0.1:3000` |
+| `WHATSAPP_TO` | Ziel-Chat/Kanal für Status-Push (aktuell die Gruppe "bot") |
+| `BINANCE_API_KEY` / `BINANCE_SECRET` | Mit **Spot-Handelsrecht**, sonst schlagen echte Käufe fehl |
+
+### Bekannte Einschränkung
+
+WhatsApp-**Gruppen** können vom Bot aktuell nicht beschrieben werden (Bug in
+`whatsapp-web.js` bei Konten mit neuer "lid"-Adressierung) — Befehle **an**
+den Bot funktionieren zuverlässig, Antworten/Status-Pushes **in die Gruppe**
+gehen aber ins Leere. Zum Prüfen des Ergebnisses `status`/`following` erneut
+schicken oder `data/live_positions_open.json` bzw. das Bot-Log ansehen.
+

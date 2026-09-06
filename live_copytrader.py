@@ -54,6 +54,7 @@ from src.adapters.binance_leaderboard import (  # noqa: E402
 from src.commands import (  # noqa: E402
     CommandHandler, CommandWebhookServer, ConsoleREPL,
 )
+from src.commands.handler import QUOTE_ASSET  # noqa: E402
 from src.commands.server import default_webhook_token  # noqa: E402
 from src.execution import real_executor as ex  # noqa: E402
 from src.notifications import get_notifier  # noqa: E402
@@ -211,9 +212,10 @@ def _handle_open(
     # Im DRY_RUN werden keine echten Mittel bewegt — der reale Kontostand
     # soll Mock-Tests nicht blocken.
     if not ex.DRY_RUN:
-        balance = ex.get_account_balance("USDT")
+        quote = _quote_asset_for(sig.symbol)
+        balance = ex.get_account_balance(quote)
         if balance < max(size_usdt, args.min_balance_usdt):
-            msg = (f"⛔ OPEN {sig.coin} geblockt: Balance ${balance:.2f} USDT < "
+            msg = (f"⛔ OPEN {sig.coin} geblockt: Balance ${balance:.2f} {quote} < "
                    f"min ${args.min_balance_usdt:.2f}")
             logger.warning(msg)
             notifier.send(msg)
@@ -354,9 +356,10 @@ def _open_manual(
     # Im DRY_RUN werden keine echten Mittel bewegt — der reale Kontostand
     # (der auch bei DRY_RUN live von Binance kommt) soll Mock-Tests nicht blocken.
     if not ex.DRY_RUN:
-        balance = ex.get_account_balance("USDT")
+        quote = _quote_asset_for(symbol)
+        balance = ex.get_account_balance(quote)
         if balance < max(usdt, args.min_balance_usdt):
-            return (f"⛔ OPEN {coin} geblockt: Balance ${balance:.2f} USDT < "
+            return (f"⛔ OPEN {coin} geblockt: Balance ${balance:.2f} {quote} < "
                     f"${max(usdt, args.min_balance_usdt):.2f}")
 
     buy, oco = ex.buy_and_protect(symbol, usdt, trader=trader_id, coin=coin)
@@ -436,6 +439,18 @@ def info_base(symbol: str) -> str:
     return symbol.replace("USDT", "").replace("USD", "").replace("BUSD", "")
 
 
+_QUOTE_SUFFIXES = ("USDT", "USDC", "BUSD", "FDUSD")
+
+
+def _quote_asset_for(symbol: str) -> str:
+    """Quote-Waehrung aus dem Handelssymbol ableiten (z.B. BTCUSDC -> USDC)."""
+    s = symbol.upper()
+    for suf in _QUOTE_SUFFIXES:
+        if s.endswith(suf):
+            return suf
+    return QUOTE_ASSET
+
+
 # ── Async-Loops ───────────────────────────────────────────────────────────────
 async def _signal_loop(adapter: BinanceLeaderboardTrader, state, args, notifier) -> None:
     while True:
@@ -505,9 +520,9 @@ async def run(args: argparse.Namespace) -> None:
         f"minCopy=${args.min_copy_size_usd:.0f} poll={args.poll_interval:.1f}s "
         f"maxPos={args.max_positions} maxDailyLoss=${args.max_daily_loss_usd:.2f}"
     )
-    balance = ex.get_account_balance("USDT")
-    logger.info(f"[LIVE] Balance: ${balance:.2f} USDT")
-    notifier.send(f"🤖 Copy-Trader gestartet ({mode})\nBalance: ${balance:.2f} USDT")
+    balance = ex.get_account_balance(QUOTE_ASSET)
+    logger.info(f"[LIVE] Balance: ${balance:.2f} {QUOTE_ASSET}")
+    notifier.send(f"🤖 Copy-Trader gestartet ({mode})\nBalance: ${balance:.2f} {QUOTE_ASSET}")
 
     adapter = BinanceLeaderboardTrader(publish_state=False)
     adapter.set_poll_interval(args.poll_interval)

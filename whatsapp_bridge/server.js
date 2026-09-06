@@ -45,6 +45,25 @@ const state = {
 
 const RECENT_MAX = 20;
 
+// Eigene per /send verschickte Texte (Chat+Body) mit Ablaufzeit — verhindert,
+// dass Bot-Antworten (kommen bei gleichem Account ueber `message_create`
+// wieder rein) als neuer Befehl re-interpretiert werden. Text-basiert statt
+// ID-basiert, weil die Message-ID erst NACH dem Senden bekannt ist (Race
+// gegen das fast zeitgleiche `message_create`-Event).
+const sentEcho = new Map(); // key: `${chatId}|${body}` -> expiresAtMs
+const SENT_ECHO_TTL_MS = 15000;
+
+function rememberSentEcho(chatId, body) {
+    const now = Date.now();
+    for (const [k, exp] of sentEcho) if (exp < now) sentEcho.delete(k);
+    sentEcho.set(`${chatId}|${body}`, now + SENT_ECHO_TTL_MS);
+}
+
+function isOwnEcho(chatId, body) {
+    const exp = sentEcho.get(`${chatId}|${body}`);
+    return typeof exp === 'number' && exp >= Date.now();
+}
+
 function rememberInbound(msg, chatName) {
     const id = msg.from;
     if (!id) return;
@@ -119,6 +138,23 @@ function attachHandlers(c) {
     c.on('message', async (msg) => {
         state.received += 1;
         if (msg.fromMe) return;
+        await handleIncoming(msg);
+    });
+
+    // Falls der Bot-Account = derselbe ist, mit dem der Nutzer selbst tippt
+    // (z.B. eigene Gruppe "bot"), liefert WhatsApp eigene Nachrichten nur ueber
+    // `message_create`, nicht ueber `message`. Eigene Bot-Antworten (per /send
+    // verschickt) werden anhand ihrer Message-ID ausgefiltert, damit sie nicht
+    // als neuer Befehl re-interpretiert werden.
+    c.on('message_create', async (msg) => {
+        if (!msg.fromMe) return;
+        // Bei fromMe ist `msg.from` die eigene Nummer — der Chat steht in `msg.to`.
+        if (isOwnEcho(msg.to, msg.body) || isOwnEcho(msg.from, msg.body)) return;
+        state.received += 1;
+        await handleIncoming(msg);
+    });
+
+    async function handleIncoming(msg) {
         if (ONLY_FROM.length && !ONLY_FROM.some(x => msg.from.startsWith(x))) return;
 
         const chatName = (await msg.getChat().catch(() => null))?.name || '';
@@ -145,7 +181,7 @@ function attachHandlers(c) {
         } catch (e) {
             console.warn('[BRIDGE] webhook error:', e.message);
         }
-    });
+    }
 }
 
 function initializeClient() {
@@ -370,6 +406,7 @@ app.post('/send', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'missing to/message' });
     }
     try {
+        rememberSentEcho(chatId, String(message));
         const sent = await client.sendMessage(chatId, String(message));
         state.sent += 1;
         return res.json({ ok: true, id: sent.id?._serialized || null });

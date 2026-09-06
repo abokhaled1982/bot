@@ -32,6 +32,7 @@ from typing import Callable, Optional
 from loguru import logger
 
 STOP_FILE = "STOP_BOT"
+QUOTE_ASSET = os.getenv("QUOTE_ASSET", "USDT").strip().upper() or "USDT"
 
 # Callback-Typen
 OpenManualFn  = Callable[[str, str, float, str, float], str]  # (coin, sym, usdt, trader, wr) -> msg
@@ -78,7 +79,7 @@ def _symbol_for(coin: str) -> str:
     c = coin.upper()
     if c.endswith(("USDT", "BUSD", "USDC", "FDUSD")):
         return c
-    return f"{c}USDT"
+    return f"{c}{QUOTE_ASSET}"
 
 
 def _short(uid: str, n: int = 8) -> str:
@@ -129,7 +130,7 @@ class CommandHandler:
 
     def cmd_status(self, _argv: list[str]) -> str:
         st = self._state()
-        bal = self._balance("USDT")
+        bal = self._balance(QUOTE_ASSET)
         open_cnt = len(st.get("positions", []))
         hist = st.get("history", [])
         pnl_today = _daily_pnl(hist)
@@ -139,7 +140,7 @@ class CommandHandler:
         gate = "⛔ STOP_BOT aktiv" if stop_active else "✅ aktiv"
         return (
             f"📊 Status  ({gate})\n"
-            f"Balance:  ${bal:.2f} USDT\n"
+            f"Balance:  ${bal:.2f} {QUOTE_ASSET}\n"
             f"Offen:    {open_cnt}\n"
             f"Historie: {len(hist)}\n"
             f"PnL heute:  {pnl_today:+.2f} USDT\n"
@@ -149,7 +150,7 @@ class CommandHandler:
         )
 
     def cmd_balance(self, argv: list[str]) -> str:
-        asset = (argv[0].upper() if argv else "USDT")
+        asset = (argv[0].upper() if argv else QUOTE_ASSET)
         bal = self._balance(asset)
         return f"💰 {asset}: {bal:.6f}"
 
