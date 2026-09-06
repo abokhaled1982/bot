@@ -212,11 +212,12 @@ def _handle_open(
         return False
 
     size_usdt = monitor.copy_size(sig.trader) or args.size_usdt
+    symbol = _force_quote(sig.symbol)  # wir handeln immer in QUOTE_ASSET, egal welches Paar der Trader nutzt
 
     # Im DRY_RUN werden keine echten Mittel bewegt — der reale Kontostand
     # soll Mock-Tests nicht blocken.
     if not ex.DRY_RUN:
-        quote = _quote_asset_for(sig.symbol)
+        quote = _quote_asset_for(symbol)
         balance = ex.get_account_balance(quote)
         if balance < max(size_usdt, args.min_balance_usdt):
             msg = (f"⛔ OPEN {sig.coin} geblockt: Balance ${balance:.2f} {quote} < "
@@ -226,7 +227,7 @@ def _handle_open(
             return False
 
     buy, oco = ex.buy_and_protect(
-        sig.symbol, size_usdt,
+        symbol, size_usdt,
         trader=sig.trader, coin=sig.coin,
         price_hint=float(sig.entry_price or 0.0) or None,
     )
@@ -239,7 +240,7 @@ def _handle_open(
     pos = Position(
         trader_id=sig.trader,
         trader_win_rate=0.0,
-        coin=sig.coin, symbol=sig.symbol, side="LONG",
+        coin=sig.coin, symbol=symbol, side="LONG",
         size_usdt=buy.total_usdt, entry_price=buy.price,
         entry_price_trader=float(sig.entry_price or 0.0),
         qty=buy.qty, order_id=buy.order_id, client_id=buy.client_id,
@@ -253,9 +254,9 @@ def _handle_open(
         oco_note = " OCO ✔" if oco.ok else f" OCO ✖ ({oco.reason})"
     msg = (
         f"📈 OPEN LONG {sig.coin} [{sig.trader}]\n"
-        f"Qty: {buy.qty:.6f} {info_base(sig.symbol)}\n"
+        f"Qty: {buy.qty:.6f} {info_base(symbol)}\n"
         f"Entry: ${buy.price:.6f}\n"
-        f"Notional: ${buy.total_usdt:.2f} USDT{oco_note}"
+        f"Notional: ${buy.total_usdt:.2f} {QUOTE_ASSET}{oco_note}"
     )
     logger.success(f"[LIVE] {msg}")
     notifier.send(msg)
@@ -461,6 +462,15 @@ def _quote_asset_for(symbol: str) -> str:
     return QUOTE_ASSET
 
 
+def _force_quote(symbol: str, quote: str = QUOTE_ASSET) -> str:
+    """Trader-Symbol (meist USDT-Futures) auf unsere Handelswaehrung ummuenzen."""
+    s = symbol.upper()
+    for suf in _QUOTE_SUFFIXES:
+        if s.endswith(suf):
+            return s[: -len(suf)] + quote
+    return s + quote
+
+
 # ── Async-Loops ───────────────────────────────────────────────────────────────
 async def _signal_loop(monitor: CopyTraderMonitor, state, args, notifier) -> None:
     async for sig in monitor.signals():
@@ -485,7 +495,7 @@ async def _status_loop(state, notifier, interval: float) -> None:
         day_pnl = _daily_realized_pnl(state["history"])
         stats = _rebuild_stats(state["history"])[:3]
         try:
-            balance = await asyncio.to_thread(ex.get_account_balance, "USDT")
+            balance = await asyncio.to_thread(ex.get_account_balance, QUOTE_ASSET)
         except Exception:
             balance = 0.0
         top = "\n".join(
@@ -494,7 +504,7 @@ async def _status_loop(state, notifier, interval: float) -> None:
         ) or "  (noch keine geschlossenen Trades)"
         msg = (
             f"📊 Status\n"
-            f"Balance: ${balance:.2f} USDT\n"
+            f"Balance: ${balance:.2f} {QUOTE_ASSET}\n"
             f"Offen: {len(state['positions'])} | Historie: {len(state['history'])}\n"
             f"PnL heute: {day_pnl:+.2f} USDT\n"
             f"Top Trader:\n{top}"
