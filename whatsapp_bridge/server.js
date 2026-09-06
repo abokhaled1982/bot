@@ -409,7 +409,8 @@ app.post('/send', async (req, res) => {
         rememberSentEcho(chatId, String(message));
         const sent = await client.sendMessage(chatId, String(message));
         state.sent += 1;
-        return res.json({ ok: true, id: sent.id?._serialized || null });
+        // Bei Gruppen liefert sendMessage undefined zurueck, obwohl die Nachricht ankommt.
+        return res.json({ ok: true, id: sent?.id?._serialized || null });
     } catch (e) {
         state.lastError = `send: ${e.message}`;
         console.error('[BRIDGE] send error:', e);
