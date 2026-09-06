@@ -103,27 +103,6 @@ def _save_json(path: str, data: Any) -> None:
     os.replace(tmp, path)
 
 
-def _load_active_traders(path: str, min_win_rate: float) -> dict[str, dict]:
-    data = _load_json(path, {"traders": []})
-    out: dict[str, dict] = {}
-    for row in data.get("traders", []):
-        uid = str(row.get("wallet") or row.get("trader_id") or "").strip()
-        if not uid:
-            continue
-        try:
-            is_copied = int(row.get("is_copied", 0))
-        except (TypeError, ValueError):
-            is_copied = 0
-        if is_copied != 1:
-            continue
-        try:
-            win_rate = float(row.get("win_rate") or 0.0)
-        except (TypeError, ValueError):
-            win_rate = 0.0
-        if win_rate < min_win_rate:
-            continue
-        out[uid] = row
-    return out
 
 
 # ── Position-Struktur & Statistik ─────────────────────────────────────────────
@@ -210,13 +189,16 @@ def _blocked_reason(state: dict, args: argparse.Namespace) -> str:
 
 # ── Signal-Handler ────────────────────────────────────────────────────────────
 def _handle_open(
-    sig: CopySignal, traders: dict[str, dict], state: dict,
-    args: argparse.Namespace, notifier,
+    sig: CopySignal, state: dict,
+    args: argparse.Namespace, notifier, adapter,
 ) -> bool:
+    # Ein Trader darf gleichzeitig nur EINE Position haben (ueber alle Coins) —
+    # neue Signale dieses Traders werden ignoriert, solange eine offene Position
+    # mit ihm existiert.
     with state["lock"]:
-        exists = any(p["trader_id"] == sig.trader and p["coin"] == sig.coin
-                     for p in state["positions"])
+        exists = any(p["trader_id"] == sig.trader for p in state["positions"])
     if exists:
+        logger.info(f"[LIVE] OPEN {sig.coin} uebersprungen — bereits Position mit {sig.trader[:8]}…")
         return False
     reason = _blocked_reason(state, args)
     if reason:
@@ -224,16 +206,21 @@ def _handle_open(
         notifier.send(f"⛔ OPEN {sig.coin} geblockt: {reason}")
         return False
 
-    balance = ex.get_account_balance("USDT")
-    if balance < max(args.size_usdt, args.min_balance_usdt):
-        msg = (f"⛔ OPEN {sig.coin} geblockt: Balance ${balance:.2f} USDT < "
-               f"min ${args.min_balance_usdt:.2f}")
-        logger.warning(msg)
-        notifier.send(msg)
-        return False
+    size_usdt = adapter.get_copy_size(sig.trader) or args.size_usdt
+
+    # Im DRY_RUN werden keine echten Mittel bewegt — der reale Kontostand
+    # soll Mock-Tests nicht blocken.
+    if not ex.DRY_RUN:
+        balance = ex.get_account_balance("USDT")
+        if balance < max(size_usdt, args.min_balance_usdt):
+            msg = (f"⛔ OPEN {sig.coin} geblockt: Balance ${balance:.2f} USDT < "
+                   f"min ${args.min_balance_usdt:.2f}")
+            logger.warning(msg)
+            notifier.send(msg)
+            return False
 
     buy, oco = ex.buy_and_protect(
-        sig.symbol, args.size_usdt,
+        sig.symbol, size_usdt,
         trader=sig.trader, coin=sig.coin,
         price_hint=float(sig.entry_price or 0.0) or None,
     )
@@ -243,10 +230,9 @@ def _handle_open(
         notifier.send(msg)
         return False
 
-    row = traders.get(sig.trader) or {}
     pos = Position(
         trader_id=sig.trader,
-        trader_win_rate=float(row.get("win_rate") or 0.0),
+        trader_win_rate=0.0,
         coin=sig.coin, symbol=sig.symbol, side="LONG",
         size_usdt=buy.total_usdt, entry_price=buy.price,
         entry_price_trader=float(sig.entry_price or 0.0),
@@ -260,8 +246,7 @@ def _handle_open(
     if oco is not None:
         oco_note = " OCO ✔" if oco.ok else f" OCO ✖ ({oco.reason})"
     msg = (
-        f"📈 OPEN LONG {sig.coin}\n"
-        f"Trader win-rate: {pos.trader_win_rate:.1f}%\n"
+        f"📈 OPEN LONG {sig.coin} [{sig.trader[:8]}…]\n"
         f"Qty: {buy.qty:.6f} {info_base(sig.symbol)}\n"
         f"Entry: ${buy.price:.6f}\n"
         f"Notional: ${buy.total_usdt:.2f} USDT{oco_note}"
@@ -325,23 +310,28 @@ def _handle_close(
     return True
 
 
-def _close_untracked(active_uids: set[str], state: dict,
-                     args: argparse.Namespace, notifier) -> int:
-    n = 0
-    for pos in list(state["positions"]):
-        if pos["trader_id"] in active_uids:
-            continue
-        pseudo = CopySignal(
-            trader=pos["trader_id"], coin=pos["coin"], symbol=pos["symbol"],
-            signal="COPY_CLOSE_LONG", size_usd=pos["size_usdt"],
-            entry_price=pos["entry_price"], leverage=1.0, pnl_pct=0.0,
-        )
-        if _handle_close(pseudo, state, args, notifier, reason_tag="TRADER_UNTRACKED"):
-            n += 1
-    return n
-
-
 # ── Manuelle Aktionen (Kommandos) ─────────────────────────────────────────────
+def _follow_trader(trader_id: str, usdt: float, *, adapter: BinanceLeaderboardTrader) -> str:
+    trader_id = trader_id.strip()
+    if not trader_id:
+        return "Trader-ID fehlt — Nutzung: /follow <TRADER_ID> <BETRAG_USDT>"
+    adapter.activate_wallet(trader_id)
+    adapter.set_copy_size(trader_id, usdt)
+    return (f"✅ Trader {trader_id[:8]}… abonniert — ${usdt:.2f}/Trade. "
+            f"Seine naechste frische Position wird kopiert (max. 1 gleichzeitig).")
+
+
+def _unfollow_trader(trader_id: str, *, adapter: BinanceLeaderboardTrader) -> str:
+    trader_id = trader_id.strip()
+    if not trader_id:
+        return "Trader-ID fehlt — Nutzung: /unfollow <TRADER_ID>"
+    if trader_id not in adapter.get_followed():
+        return f"ℹ️ Trader {trader_id[:8]}… ist nicht abonniert."
+    adapter.deactivate_wallet(trader_id)
+    return (f"🛑 Trader {trader_id[:8]}… deabonniert. "
+            f"Eine bereits offene Position (falls vorhanden) laeuft unveraendert weiter.")
+
+
 def _open_manual(
     coin: str, symbol: str, usdt: float, trader_id: str, win_rate: float,
     *, state: dict, args: argparse.Namespace, notifier,
@@ -361,10 +351,13 @@ def _open_manual(
     elif os.path.exists(STOP_FILE):
         return f"⛔ STOP_BOT gesetzt — MANUAL-Open nur nach /resume."
 
-    balance = ex.get_account_balance("USDT")
-    if balance < max(usdt, args.min_balance_usdt):
-        return (f"⛔ OPEN {coin} geblockt: Balance ${balance:.2f} USDT < "
-                f"${max(usdt, args.min_balance_usdt):.2f}")
+    # Im DRY_RUN werden keine echten Mittel bewegt — der reale Kontostand
+    # (der auch bei DRY_RUN live von Binance kommt) soll Mock-Tests nicht blocken.
+    if not ex.DRY_RUN:
+        balance = ex.get_account_balance("USDT")
+        if balance < max(usdt, args.min_balance_usdt):
+            return (f"⛔ OPEN {coin} geblockt: Balance ${balance:.2f} USDT < "
+                    f"${max(usdt, args.min_balance_usdt):.2f}")
 
     buy, oco = ex.buy_and_protect(symbol, usdt, trader=trader_id, coin=coin)
     if not buy.ok or buy.qty <= 0:
@@ -443,51 +436,16 @@ def info_base(symbol: str) -> str:
     return symbol.replace("USDT", "").replace("USD", "").replace("BUSD", "")
 
 
-def _apply_traders_to_adapter(
-    adapter: BinanceLeaderboardTrader, traders: dict[str, dict],
-) -> None:
-    adapter._auto_uids = list(traders.keys())
-    adapter._rebuild_uid_list()
-
-
 # ── Async-Loops ───────────────────────────────────────────────────────────────
-async def _traders_reload_loop(adapter, state, args, notifier) -> None:
-    while True:
-        await asyncio.sleep(args.traders_reload)
-        try:
-            traders = await asyncio.to_thread(
-                _load_active_traders, args.traders_file, args.min_win_rate,
-            )
-        except Exception as e:
-            logger.error(f"[LIVE] traders_export.json Reload-Fehler: {e}")
-            continue
-        prev = set(state["traders"].keys())
-        curr = set(traders.keys())
-        state["traders"] = traders
-        _apply_traders_to_adapter(adapter, traders)
-        added, dropped = curr - prev, prev - curr
-        if added or dropped:
-            logger.info(
-                f"[LIVE] Trader-Liste aktualisiert +{len(added)} / -{len(dropped)} "
-                f"| aktiv: {len(traders)}"
-            )
-            if dropped:
-                closed = await asyncio.to_thread(
-                    _close_untracked, curr, state, args, notifier,
-                )
-                if closed:
-                    _persist(state, args)
-
-
-async def _signal_loop(adapter, state, args, notifier) -> None:
+async def _signal_loop(adapter: BinanceLeaderboardTrader, state, args, notifier) -> None:
     while True:
         sig: CopySignal = await adapter.signal_queue.get()
-        if sig.trader not in state["traders"]:
+        if not adapter.is_copied(sig.trader):
             continue
         changed = False
         if sig.signal == "COPY_OPEN_LONG":
             changed = await asyncio.to_thread(
-                _handle_open, sig, state["traders"], state, args, notifier,
+                _handle_open, sig, state, args, notifier, adapter,
             )
         elif sig.signal == "COPY_CLOSE_LONG":
             changed = await asyncio.to_thread(
@@ -531,7 +489,6 @@ async def run(args: argparse.Namespace) -> None:
     state: dict[str, Any] = {
         "positions": _load_json(args.open_file, []),
         "history":   _load_json(args.closed_file, []),
-        "traders":   {},
         "lock":      threading.RLock(),
     }
     for f in (args.open_file, args.closed_file):
@@ -552,19 +509,14 @@ async def run(args: argparse.Namespace) -> None:
     logger.info(f"[LIVE] Balance: ${balance:.2f} USDT")
     notifier.send(f"🤖 Copy-Trader gestartet ({mode})\nBalance: ${balance:.2f} USDT")
 
-    traders = _load_active_traders(args.traders_file, args.min_win_rate)
-    state["traders"] = traders
-    logger.info(f"[LIVE] {len(traders)} aktive Trader "
-                f"(is_copied=1 & win_rate>={args.min_win_rate:.0f}%)")
-
     adapter = BinanceLeaderboardTrader(publish_state=False)
     adapter.set_poll_interval(args.poll_interval)
     adapter.set_min_copy_size(args.min_copy_size_usd)
-    _apply_traders_to_adapter(adapter, traders)
+    logger.info("[LIVE] Kein Auto-Copy — nur manuell per /follow abonnierte Trader werden kopiert.")
 
     cmd_handler = CommandHandler(
         state_provider=lambda: state,
-        traders_provider=lambda: state["traders"],
+        traders_provider=adapter.get_followed,
         open_manual=lambda coin, sym, usdt, trader, wr: _open_manual(
             coin, sym, usdt, trader, wr,
             state=state, args=args, notifier=notifier,
@@ -576,6 +528,8 @@ async def run(args: argparse.Namespace) -> None:
         get_price=_cmd_get_price,
         get_balance=_cmd_get_balance,
         default_size_usdt=args.size_usdt,
+        follow_trader=lambda trader, usdt: _follow_trader(trader, usdt, adapter=adapter),
+        unfollow_trader=lambda trader: _unfollow_trader(trader, adapter=adapter),
     )
     webhook = None
     if args.webhook_port > 0:
@@ -596,7 +550,6 @@ async def run(args: argparse.Namespace) -> None:
 
     tasks = [
         asyncio.create_task(adapter.start()),
-        asyncio.create_task(_traders_reload_loop(adapter, state, args, notifier)),
         asyncio.create_task(_signal_loop(adapter, state, args, notifier)),
     ]
     if args.status_interval > 0:

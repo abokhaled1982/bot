@@ -18,6 +18,9 @@ Kommandos (fuehrendes `/` oder `!` optional, case-insensitive):
   close <COIN> [TRADER]            Schliesst Position(en) auf COIN
   copy <TRADER> <COIN> <USDT>      Kauf im Namen des Traders
   copyclose <TRADER> <COIN>        Schliesst Copy-Position dieses Traders
+  follow <TRADER> <USDT>           Trader abonnieren (kopiert dessen naechste frische Position)
+  unfollow <TRADER>                Trader deabonnieren
+  following                        Abonnierte Trader + Betrag + Status
   stop                             touch STOP_BOT (blockt neue Opens)
   resume                           STOP_BOT entfernen
 """
@@ -37,6 +40,8 @@ PriceFn       = Callable[[str], Optional[float]]
 BalanceFn     = Callable[[str], float]
 StateProvider = Callable[[], dict]
 TradersProv   = Callable[[], dict]
+FollowFn      = Callable[[str, float], str]   # (trader, usdt) -> msg
+UnfollowFn    = Callable[[str], str]          # (trader) -> msg
 
 
 HELP_TEXT = (
@@ -51,6 +56,9 @@ HELP_TEXT = (
     "  /close <COIN> [TRADER]         Position schliessen\n"
     "  /copy <TRADER> <COIN> <USDT>   Kauf im Namen des Traders\n"
     "  /copyclose <TRADER> <COIN>     Copy-Position des Traders schliessen\n"
+    "  /follow <TRADER> <USDT>        Trader abonnieren (naechste frische Position wird kopiert)\n"
+    "  /unfollow <TRADER>             Trader deabonnieren\n"
+    "  /following                     Abonnierte Trader + Betrag + Status\n"
     "  /stop                          Neue Opens blockieren\n"
     "  /resume                        Blockade aufheben\n"
     "  /help                          Diese Uebersicht"
@@ -87,6 +95,8 @@ class CommandHandler:
         get_price: PriceFn,
         get_balance: BalanceFn,
         default_size_usdt: float,
+        follow_trader: Optional[FollowFn] = None,
+        unfollow_trader: Optional[UnfollowFn] = None,
     ) -> None:
         self._state = state_provider
         self._traders = traders_provider
@@ -95,6 +105,8 @@ class CommandHandler:
         self._price = get_price
         self._balance = get_balance
         self._default_size = float(default_size_usdt)
+        self._follow = follow_trader
+        self._unfollow = unfollow_trader
 
     # ── Dispatcher ────────────────────────────────────────────────────────────
     def dispatch(self, text: str, source: str = "console") -> str:
@@ -132,7 +144,8 @@ class CommandHandler:
             f"Historie: {len(hist)}\n"
             f"PnL heute:  {pnl_today:+.2f} USDT\n"
             f"PnL gesamt: {pnl_total:+.2f} USDT\n"
-            f"Aktive Trader (Auto-Copy): {len(traders)}"
+            f"Abonnierte Trader: {len(traders)}\n"
+            f"{self._following_lines(traders, st.get('positions', []))}"
         )
 
     def cmd_balance(self, argv: list[str]) -> str:
@@ -232,13 +245,7 @@ class CommandHandler:
         usdt = _parse_amount(argv[2])
         if usdt is None or usdt <= 0:
             return "Betrag ungueltig"
-        wr = 0.0
-        row = self._traders().get(trader) or {}
-        try:
-            wr = float(row.get("win_rate") or 0)
-        except (TypeError, ValueError):
-            wr = 0.0
-        return self._open(coin, _symbol_for(coin), usdt, trader, wr)
+        return self._open(coin, _symbol_for(coin), usdt, trader, 0.0)
 
     def cmd_copyclose(self, argv: list[str]) -> str:
         if len(argv) < 2:
@@ -246,6 +253,42 @@ class CommandHandler:
         trader = argv[0]
         coin = argv[1].upper()
         return self._close(coin, trader, "MANUAL_COPYCLOSE")
+
+    # ── Trader-Abo ────────────────────────────────────────────────────────────
+    def _following_lines(self, followed: dict, positions: list[dict]) -> str:
+        if not followed:
+            return "  (keine abonnierten Trader)"
+        lines = []
+        for uid, size in followed.items():
+            has_pos = any(p.get("trader_id") == uid for p in positions)
+            status = "🟢 offene Position" if has_pos else "⚪ wartet auf frische Position"
+            lines.append(f"  · {_short(uid)}  ${float(size):.2f}/Trade  {status}")
+        return "\n".join(lines)
+
+    def cmd_follow(self, argv: list[str]) -> str:
+        if self._follow is None:
+            return "❌ /follow ist in diesem Modus nicht verfuegbar."
+        if len(argv) < 2:
+            return "Nutzung: /follow <TRADER_ID> <BETRAG_USDT>"
+        trader = argv[0].strip()
+        usdt = _parse_amount(argv[1])
+        if usdt is None or usdt <= 0:
+            return "Betrag ungueltig — Nutzung: /follow <TRADER_ID> <BETRAG_USDT>"
+        return self._follow(trader, usdt)
+
+    def cmd_unfollow(self, argv: list[str]) -> str:
+        if self._unfollow is None:
+            return "❌ /unfollow ist in diesem Modus nicht verfuegbar."
+        if not argv:
+            return "Nutzung: /unfollow <TRADER_ID>"
+        return self._unfollow(argv[0].strip())
+
+    def cmd_following(self, _argv: list[str]) -> str:
+        followed = self._traders()
+        if not followed:
+            return "📭 keine abonnierten Trader — /follow <TRADER_ID> <USDT>"
+        positions = self._state().get("positions", [])
+        return "👥 Abonnierte Trader:\n" + self._following_lines(followed, positions)
 
     # ── Kill-Switch ───────────────────────────────────────────────────────────
     def cmd_stop(self, _argv: list[str]) -> str:

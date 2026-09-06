@@ -688,6 +688,14 @@ class BinanceLeaderboardTrader:
         self._positions.pop(uid, None)
         self._telemetry.pop(uid, None)
 
+    def get_followed(self) -> dict[str, float]:
+        """Manuell abonnierte Trader (trader_store) mit ihrem Copy-Betrag."""
+        with self._uids_lock:
+            return {
+                uid: self._copy_sizes.get(uid, 0.0)
+                for uid in sorted(self._manual_active)
+            }
+
     def get_focus_wallet(self) -> Optional[str]:
         return self._focus_uid
 
