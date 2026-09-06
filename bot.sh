@@ -114,6 +114,32 @@ kill_stale() {
     done
 }
 
+save_ports() {
+    printf 'BRIDGE_PORT=%s\nCMD_PORT=%s\n' "$BRIDGE_PORT" "$CMD_PORT" > "$PORTS_FILE"
+}
+
+load_ports() {
+    [[ -f "$PORTS_FILE" ]] || return 0
+    # shellcheck disable=SC1090
+    source "$PORTS_FILE"
+    BRIDGE_URL="http://127.0.0.1:${BRIDGE_PORT}"
+    WEBHOOK_URL="http://127.0.0.1:${CMD_PORT}/wa"
+}
+
+choose_port() {
+    local want=$1 label=$2
+    if port_in_use "$want"; then
+        local free
+        if free=$(pick_free_port "$((want+1))"); then
+            warn "Port $want ($label) belegt (fremder Prozess) — nutze stattdessen $free"
+            printf '%s' "$free"; return 0
+        fi
+        err "Kein freier Port ab $want fuer $label gefunden"
+        return 1
+    fi
+    printf '%s' "$want"
+}
+
 rotate_log() {
     local f=$1
     [[ -f "$f" && -s "$f" ]] || return 0
@@ -167,12 +193,15 @@ start_bridge() {
         return 0
     fi
     kill_stale "node .*server\\.js" "Bridge"
-    free_port "$BRIDGE_PORT" "Bridge"
+    BRIDGE_PORT=$(choose_port "$BRIDGE_PORT_DEFAULT" "Bridge") || return 1
+    BRIDGE_URL="http://127.0.0.1:${BRIDGE_PORT}"
+    save_ports
     rotate_log "$BRIDGE_LOG"
-    info "Starte Bridge → Log: $BRIDGE_LOG"
+    info "Starte Bridge auf Port $BRIDGE_PORT → Log: $BRIDGE_LOG"
     (
         cd "$BRIDGE_DIR"
-        WEBHOOK_URL="$WEBHOOK_URL" nohup node server.js >>"$BRIDGE_LOG" 2>&1 &
+        PORT="$BRIDGE_PORT" WEBHOOK_URL="$WEBHOOK_URL" \
+            nohup node server.js >>"$BRIDGE_LOG" 2>&1 &
         echo $! > "$BRIDGE_PID_FILE"
     )
     local pid
@@ -190,13 +219,16 @@ start_bot() {
         return 0
     fi
     kill_stale "python.* live_copytrader\\.py" "Bot"
-    free_port "$CMD_PORT" "Cmd-Webhook"
+    CMD_PORT=$(choose_port "$CMD_PORT_DEFAULT" "Cmd-Webhook") || return 1
+    WEBHOOK_URL="http://127.0.0.1:${CMD_PORT}/wa"
+    save_ports
     rotate_log "$BOT_LOG"
-    info "Starte Bot → Log: $BOT_LOG (WHATSAPP_TO=$WHATSAPP_TO)"
+    info "Starte Bot (Cmd-Port $CMD_PORT) → Log: $BOT_LOG (WHATSAPP_TO=$WHATSAPP_TO)"
     (
         cd "$REPO_ROOT"
         WHATSAPP_BRIDGE_URL="$BRIDGE_URL" \
         WHATSAPP_TO="$WHATSAPP_TO" \
+        LIVE_WEBHOOK_PORT="$CMD_PORT" \
         nohup "$VENV_PY" -u live_copytrader.py "${BOT_ARGS[@]}" \
             >>"$BOT_LOG" 2>&1 &
         echo $! > "$BOT_PID_FILE"
