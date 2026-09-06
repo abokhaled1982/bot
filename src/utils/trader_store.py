@@ -1,61 +1,46 @@
 """
-src/utils/trader_store.py — SQLite-State, den Bot und Dashboard teilen.
+src/utils/trader_store.py — State, den Bot und Dashboard teilen.
 
-WARUM EINE DATENBANK UND KEINE JSON-DATEIEN
--------------------------------------------
-`main.py` (Bot) und `streamlit run dashboard.py` sind **zwei getrennte
-Betriebssystem-Prozesse**. Sie teilen keine Python-Objekte. Alles, was der
-Nutzer im Frontend auswählt, muss deshalb an einem Ort liegen, den der Bot
-*zur Laufzeit erneut liest* — sonst wirkt eine Änderung erst nach Neustart.
-Genau das war der Fehler der alten JSON-Dateien: sie wurden nur einmal beim
-Adapter-Start eingelesen.
+WO WAS LIEGT
+------------
+Die **Trader-Auswahl** (wer wird kopiert, mit welchem Betrag) liegt in
+`data/copy_traders.json` — als Klartext-JSON, damit sie zusammen mit den
+Trade-Dateien auf einen anderen Rechner kopiert werden kann und auch bei
+gestopptem Bot lesbar/editierbar bleibt. Sie ist die Source of Truth.
+
+Die **Telemetrie** (Tracker-Status, Heartbeat, Ereignis-Feed, Simulationen,
+Verifikationen) bleibt in SQLite: reine Laufzeitdaten, nicht portabel nötig.
 
 DATENFLUSS
 ----------
-    Dashboard  --schreibt-->  copy_traders   --liest-->  Bot (Sync-Loop, 3s)
-    Bot        --schreibt-->  tracker_state  --liest-->  Dashboard
-    Bot        --schreibt-->  bot_heartbeat  --liest-->  Dashboard
-
-TABELLEN
---------
-copy_traders   Die vom Nutzer gewählten Trader: Betrag pro Trade, Copy an/aus,
-               Anpinnung, Notiz und die zuletzt bekannten Trader-Kennzahlen.
-tracker_state  Beweis, dass Tracking wirklich läuft: WS-Subscription, letzter
-               gesehener Fill, Poll-Zähler, aktuelle HL-Positionen.
-bot_heartbeat  Eine Zeile: lebt der Bot-Prozess, steht der WebSocket, DRY_RUN.
-pipeline_events Was die Pipeline mit einem Signal gemacht hat — angenommen,
-               verworfen (mit Grund), gekauft, verkauft. Grundlage für den
-               Live-Feed im Dashboard und für Debugging nach einem Vorfall.
+    Dashboard  --schreibt-->  copy_traders.json --liest-->  Bot (Sync-Loop, 3s)
+    Bot        --schreibt-->  tracker_state     --liest-->  Dashboard
+    Bot        --schreibt-->  bot_heartbeat     --liest-->  Dashboard
 
 NEBENLÄUFIGKEIT
 ---------------
-Zwei Prozesse schreiben gleichzeitig. Deshalb WAL-Journal + busy_timeout und
+Zwei Prozesse schreiben gleichzeitig. JSON-Änderungen laufen unter einer
+`flock`-Sperre und werden per `os.replace` atomar sichtbar; Leser sehen daher
+nie eine halb geschriebene Datei. SQLite nutzt WAL-Journal + busy_timeout und
 ausschließlich kurzlebige Verbindungen (keine geteilte Connection über Threads).
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import sqlite3
+import tempfile
 import time
 from typing import Any, Optional
 
 DB_PATH = os.getenv("BOT_DB_PATH", "db/binance_orderflow.db")
 
+# Die Trader-Auswahl liegt bewusst als JSON vor: sie ist die Source of Truth
+# und soll ohne DB-Export auf einen anderen Rechner kopierbar sein.
+TRADERS_FILE = os.getenv("BOT_TRADERS_FILE", "data/copy_traders.json")
+
 _SCHEMA = (
-    """CREATE TABLE IF NOT EXISTS copy_traders (
-        wallet      TEXT PRIMARY KEY,
-        size_usdt   REAL,
-        is_copied   INTEGER NOT NULL DEFAULT 0,
-        is_focus    INTEGER NOT NULL DEFAULT 0,
-        note        TEXT    NOT NULL DEFAULT '',
-        source      TEXT    NOT NULL DEFAULT 'manual',
-        account_usd REAL    NOT NULL DEFAULT 0,
-        win_rate    REAL    NOT NULL DEFAULT 0,
-        trades      INTEGER NOT NULL DEFAULT 0,
-        added_at    REAL    NOT NULL DEFAULT 0,
-        updated_at  REAL    NOT NULL DEFAULT 0
-    )""",
     """CREATE TABLE IF NOT EXISTS tracker_state (
         wallet          TEXT PRIMARY KEY,
         is_copied       INTEGER NOT NULL DEFAULT 0,
@@ -134,9 +119,72 @@ def init_db() -> None:
     with _connect() as conn:
         for stmt in _SCHEMA:
             conn.execute(stmt)
+    _migrate_traders_from_sqlite()
 
 
-# ── copy_traders (Dashboard schreibt, Bot liest) ─────────────────────────────
+# ── copy_traders (JSON — Source of Truth, portabel) ──────────────────────────
+
+_TRADER_FIELDS: dict[str, Any] = {
+    "wallet": "", "size_usdt": None, "is_copied": 0, "is_focus": 0,
+    "note": "", "source": "manual", "account_usd": 0.0,
+    "win_rate": 0.0, "trades": 0, "added_at": 0.0, "updated_at": 0.0,
+}
+
+
+def _normalize(row: dict[str, Any]) -> dict[str, Any]:
+    return {k: row.get(k, default) for k, default in _TRADER_FIELDS.items()}
+
+
+def _read_traders() -> list[dict[str, Any]]:
+    try:
+        with open(TRADERS_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [_normalize(r) for r in data if isinstance(r, dict) and r.get("wallet")]
+
+
+def _write_traders(rows: list[dict[str, Any]]) -> None:
+    parent = os.path.dirname(TRADERS_FILE) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".copy_traders_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(rows, fh, indent=2, ensure_ascii=False)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, TRADERS_FILE)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+class _traders_locked:
+    """Read-modify-write serialisiert über Prozessgrenzen (Bot + Dashboard)."""
+
+    def __enter__(self) -> list[dict[str, Any]]:
+        parent = os.path.dirname(TRADERS_FILE) or "."
+        os.makedirs(parent, exist_ok=True)
+        self._fh = open(os.path.join(parent, ".copy_traders.lock"), "w")
+        fcntl.flock(self._fh, fcntl.LOCK_EX)
+        self.rows = _read_traders()
+        return self.rows
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            if exc_type is None:
+                _write_traders(self.rows)
+        finally:
+            fcntl.flock(self._fh, fcntl.LOCK_UN)
+            self._fh.close()
+
+
+def _find(rows: list[dict[str, Any]], wallet: str) -> Optional[dict[str, Any]]:
+    return next((r for r in rows if r["wallet"] == wallet), None)
+
 
 def upsert_trader(
     wallet: str,
@@ -152,52 +200,40 @@ def upsert_trader(
     if not wallet:
         return
     now = time.time()
-    with _connect() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO copy_traders (wallet, added_at, updated_at) "
-            "VALUES (?,?,?)",
-            (wallet, now, now),
-        )
-        sets, args = [], []
+    with _traders_locked() as rows:
+        row = _find(rows, wallet)
+        if row is None:
+            row = _normalize({"wallet": wallet, "added_at": now})
+            rows.append(row)
         if size_usdt is not None:
-            sets.append("size_usdt = ?")
-            args.append(float(size_usdt) if size_usdt > 0 else None)
+            row["size_usdt"] = float(size_usdt) if size_usdt > 0 else None
         if is_copied is not None:
-            sets.append("is_copied = ?")
-            args.append(1 if is_copied else 0)
+            row["is_copied"] = 1 if is_copied else 0
         if is_focus is not None:
-            sets.append("is_focus = ?")
-            args.append(1 if is_focus else 0)
+            row["is_focus"] = 1 if is_focus else 0
         if note is not None:
-            sets.append("note = ?")
-            args.append(note[:500])
+            row["note"] = note[:500]
         if source is not None:
-            sets.append("source = ?")
-            args.append(source[:20])
-        sets.append("updated_at = ?")
-        args.append(now)
-        args.append(wallet)
-        conn.execute(
-            f"UPDATE copy_traders SET {', '.join(sets)} WHERE wallet = ?", args
-        )
+            row["source"] = source[:20]
+        row["updated_at"] = now
 
 
 def set_focus(wallet: Optional[str]) -> None:
     """Genau einen Trader anpinnen (oder mit `None` alle Anpinnungen lösen)."""
     now = time.time()
-    with _connect() as conn:
-        conn.execute("UPDATE copy_traders SET is_focus = 0, updated_at = ?", (now,))
-        if wallet and wallet.strip():
-            w = wallet.strip()
-            conn.execute(
-                "INSERT OR IGNORE INTO copy_traders (wallet, added_at, updated_at) "
-                "VALUES (?,?,?)",
-                (w, now, now),
-            )
-            conn.execute(
-                "UPDATE copy_traders SET is_focus = 1, updated_at = ? WHERE wallet = ?",
-                (now, w),
-            )
+    w = (wallet or "").strip()
+    with _traders_locked() as rows:
+        for r in rows:
+            if r["is_focus"]:
+                r["is_focus"] = 0
+                r["updated_at"] = now
+        if w:
+            row = _find(rows, w)
+            if row is None:
+                row = _normalize({"wallet": w, "added_at": now})
+                rows.append(row)
+            row["is_focus"] = 1
+            row["updated_at"] = now
 
 
 def update_trader_stats(
@@ -205,45 +241,48 @@ def update_trader_stats(
     win_rate: float = 0.0, trades: int = 0,
 ) -> None:
     """Zuletzt bekannte Trader-Kennzahlen mitschreiben (nur zur Anzeige)."""
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE copy_traders SET account_usd = ?, win_rate = ?, trades = ?, "
-            "updated_at = ? WHERE wallet = ?",
-            (float(account_usd), float(win_rate), int(trades), time.time(), wallet.strip()),
+    with _traders_locked() as rows:
+        row = _find(rows, wallet.strip())
+        if row is None:
+            return
+        row.update(
+            account_usd=float(account_usd), win_rate=float(win_rate),
+            trades=int(trades), updated_at=time.time(),
         )
 
 
 def remove_trader(wallet: str) -> None:
     """Trader vollständig entfernen (inkl. Tracking-Telemetrie)."""
     w = wallet.strip()
+    with _traders_locked() as rows:
+        rows[:] = [r for r in rows if r["wallet"] != w]
     with _connect() as conn:
-        conn.execute("DELETE FROM copy_traders WHERE wallet = ?", (w,))
         conn.execute("DELETE FROM tracker_state WHERE wallet = ?", (w,))
         conn.execute("DELETE FROM trader_verifications WHERE wallet = ?", (w,))
 
 
 def list_traders() -> list[dict[str, Any]]:
     """Alle gewählten Trader — angepinnte zuerst, dann kopierte, dann Rest."""
-    try:
-        with _connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM copy_traders "
-                "ORDER BY is_focus DESC, is_copied DESC, added_at ASC"
-            ).fetchall()
-    except sqlite3.Error:
-        return []
-    return [dict(r) for r in rows]
+    return sorted(
+        _read_traders(),
+        key=lambda r: (-int(r["is_focus"]), -int(r["is_copied"]), float(r["added_at"])),
+    )
 
 
 def get_focus() -> Optional[str]:
+    return next((r["wallet"] for r in _read_traders() if r["is_focus"]), None)
+
+
+def _migrate_traders_from_sqlite() -> None:
+    """Einmalig: bestehende copy_traders-Tabelle in die JSON-Datei übernehmen."""
+    if os.path.exists(TRADERS_FILE):
+        return
     try:
         with _connect() as conn:
-            row = conn.execute(
-                "SELECT wallet FROM copy_traders WHERE is_focus = 1 LIMIT 1"
-            ).fetchone()
+            rows = conn.execute("SELECT * FROM copy_traders").fetchall()
     except sqlite3.Error:
-        return None
-    return row["wallet"] if row else None
+        rows = []
+    _write_traders([_normalize(dict(r)) for r in rows])
 
 
 def save_verification(wallet: str, metrics: dict[str, Any]) -> None:
