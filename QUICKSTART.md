@@ -117,9 +117,15 @@ python3 monitor_traders.py
 
 **Trader mit Winrate ≥ 80 % beobachten und Paper-Copy-Meldungen anzeigen:**
 ```bash
-python3 monitor_traders.py \
-  --min-win-rate 80 --min-day-roi 0 --min-day-pnl 0 \
-  --limit 10 --paper-copy
+cd ~/bot
+source .venv/bin/activate         # oder was du auf dem ODROID nutzt
+WHATSAPP_BRIDGE_URL=http://127.0.0.1:3000 \
+WHATSAPP_TO=120363429746414084@g.us \
+python3 live_copytrader.py --status-interval 0
+
+cd ~/bot/whatsapp_bridge
+WEBHOOK_URL="http://127.0.0.1:3100/wa" node server.js
+# warten bis: [BRIDGE] ready ✔
 ```
 
 Wichtige Optionen:
