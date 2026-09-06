@@ -15,3 +15,33 @@ BINANCE_SECRET=cM84rXzfMpVhMwKH6CvcpZBb1exGkCw7js7qAQVAQIDYC1Y4mg6Wv7XLjMn5lBPO
 
 .venv/bin/python mock_wa_commands.py                    # Standard-Sequenz (status/balance/price/positions/following/help)
 .venv/bin/python mock_wa_commands.py --cmd "price ETH"  # einzelnes Kommando
+
+
+
+OK: keine Datei/DB wurde durch diesen Test veraendert (nur In-Memory State).
+(bot) whsg@whsg-ODROID-H3:~/bot$ python3 live_copytrader.py --status-interval 0
+18:08:54 | INFO    | [LIVE] Start DRY-RUN | size=$20.00 minWR=80% minCopy=$50 poll=3.0s maxPos=5 maxDailyLoss=$30.00
+18:08:55 | INFO    | [LIVE] Balance: $0.00 USDT
+18:08:55 | INFO    | [LIVE] Kein Auto-Copy — nur manuell per /follow abonnierte Trader werden kopiert.
+18:08:55 | INFO    | [CMD-WH] listening on http://127.0.0.1:3100/wa (no auth)
+trader> 
+🤖 Copy-Trader — Kommandos:
+  /status                        Balance, offene Positionen, PnL heute
+  /balance [ASSET]               Guthaben (Default USDT)
+  /positions                     Offene Positionen
+  /traders [N]                   Top-N Trader nach PnL
+  /price <COIN>                  Marktpreis
+  /buy <COIN> <USDT>             Direkter Kauf (Tag: MANUAL)
+  /sell <COIN>                   MANUAL-Position schliessen
+  /close <COIN> [TRADER]         Position schliessen
+  /copy <TRADER> <COIN> <USDT>   Kauf im Namen des Traders
+  /copyclose <TRADER> <COIN>     Copy-Position des Traders schliessen
+  /follow <TRADER> <USDT>        Trader abonnieren (naechste frische Position wird kopiert)
+  /unfollow <TRADER>             Trader deabonnieren
+  /following                     Abonnierte Trader + Betrag + Status
+  /stop                          Neue Opens blockieren
+  /resume                        Blockade aufheben
+  /help                          Diese Uebersicht
+
+18:08:55 | INFO    | [INIT] Kein Trader ausgewaehlt
+18:09:11 | INFO    | [CMD:wa:120363429746] 'Status'
