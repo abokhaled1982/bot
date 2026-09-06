@@ -381,7 +381,7 @@ async def handle_copy_signal(
             price = float(pos.get("entry_price", 0))
         _close_paper_position(
             symbol, pos, price,
-            f"TRADER_CLOSED ({sig.trader_short})", positions,
+            f"TRADER_CLOSED ({sig.trader})", positions,
         )
         return True
 
@@ -399,7 +399,7 @@ async def handle_copy_signal(
             if price > 0:
                 _close_paper_position(
                     symbol, positions[symbol], price,
-                    f"TRADER_DECREASED ({sig.trader_short})", positions,
+                    f"TRADER_DECREASED ({sig.trader})", positions,
                 )
                 return True
         return False

@@ -1139,6 +1139,7 @@ def _render_scanner(adapter):
                             "Gründe": " · ".join(candidate["verification_reasons"]),
                         } for candidate in rejected[:10]]),
                         width="stretch", hide_index=True,
+                        column_config={"Trader": st.column_config.TextColumn(width="large")},
                     )
         return
 
@@ -1442,6 +1443,7 @@ def _render_history() -> None:
         } for row in history]),
         width="stretch", hide_index=True,
         column_config={
+            "Trader": st.column_config.TextColumn(width="large"),
             "Einsatz": st.column_config.NumberColumn(format="$%.2f"),
             "Entry": st.column_config.NumberColumn(format="$%.4f"),
             "Exit": st.column_config.NumberColumn(format="$%.4f"),
@@ -1528,6 +1530,7 @@ def _render_setup(adapter):
                 "Meldung": e["message"],
             } for e in events]),
             width="stretch", hide_index=True,
+            column_config={"Trader": st.column_config.TextColumn(width="large")},
         )
 
     _events_live()

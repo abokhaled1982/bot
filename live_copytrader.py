@@ -203,7 +203,7 @@ def _handle_open(
     with state["lock"]:
         exists = any(p["trader_id"] == sig.trader for p in state["positions"])
     if exists:
-        logger.info(f"[LIVE] OPEN {sig.coin} uebersprungen — bereits Position mit {sig.trader[:8]}…")
+        logger.info(f"[LIVE] OPEN {sig.coin} uebersprungen — bereits Position mit {sig.trader}")
         return False
     reason = _blocked_reason(state, args)
     if reason:
@@ -252,7 +252,7 @@ def _handle_open(
     if oco is not None:
         oco_note = " OCO ✔" if oco.ok else f" OCO ✖ ({oco.reason})"
     msg = (
-        f"📈 OPEN LONG {sig.coin} [{sig.trader[:8]}…]\n"
+        f"📈 OPEN LONG {sig.coin} [{sig.trader}]\n"
         f"Qty: {buy.qty:.6f} {info_base(sig.symbol)}\n"
         f"Entry: ${buy.price:.6f}\n"
         f"Notional: ${buy.total_usdt:.2f} USDT{oco_note}"
@@ -323,7 +323,7 @@ def _follow_trader(trader_id: str, usdt: float, *, adapter: BinanceLeaderboardTr
         return "Trader-ID fehlt — Nutzung: /follow <TRADER_ID> <BETRAG_USDT>"
     adapter.activate_wallet(trader_id)
     adapter.set_copy_size(trader_id, usdt)
-    return (f"✅ Trader {trader_id[:8]}… abonniert — ${usdt:.2f}/Trade. "
+    return (f"✅ Trader {trader_id} abonniert — ${usdt:.2f}/Trade. "
             f"Seine naechste frische Position wird kopiert (max. 1 gleichzeitig).")
 
 
@@ -332,9 +332,9 @@ def _unfollow_trader(trader_id: str, *, adapter: BinanceLeaderboardTrader) -> st
     if not trader_id:
         return "Trader-ID fehlt — Nutzung: /unfollow <TRADER_ID>"
     if trader_id not in adapter.get_followed():
-        return f"ℹ️ Trader {trader_id[:8]}… ist nicht abonniert."
+        return f"ℹ️ Trader {trader_id} ist nicht abonniert."
     adapter.deactivate_wallet(trader_id)
-    return (f"🛑 Trader {trader_id[:8]}… deabonniert. "
+    return (f"🛑 Trader {trader_id} deabonniert. "
             f"Eine bereits offene Position (falls vorhanden) laeuft unveraendert weiter.")
 
 
@@ -348,7 +348,7 @@ def _open_manual(
             for p in state["positions"]
         )
     if exists:
-        return f"ℹ️ Position {coin} [{trader_id[:8]}] existiert bereits."
+        return f"ℹ️ Position {coin} [{trader_id}] existiert bereits."
 
     if trader_id != "MANUAL":
         reason = _blocked_reason(state, args)
@@ -387,7 +387,7 @@ def _open_manual(
     if oco is not None:
         oco_note = " OCO ✔" if oco.ok else f" OCO ✖ ({oco.reason})"
     msg = (
-        f"📈 OPEN LONG {coin} [{trader_id[:8]}]\n"
+        f"📈 OPEN LONG {coin} [{trader_id}]\n"
         f"Qty: {buy.qty:.6f} {info_base(symbol)}\n"
         f"Entry: ${buy.price:.6f}\n"
         f"Notional: ${buy.total_usdt:.2f} USDT{oco_note}"
@@ -418,9 +418,9 @@ def _close_by_coin(
         )
         ok = _handle_close(pseudo, state, args, notifier, reason_tag=reason_tag)
         if ok:
-            lines.append(f"✅ {coin} [{match['trader_id'][:8]}] geschlossen")
+            lines.append(f"✅ {coin} [{match['trader_id']}] geschlossen")
         else:
-            lines.append(f"❌ {coin} [{match['trader_id'][:8]}] fehlgeschlagen")
+            lines.append(f"❌ {coin} [{match['trader_id']}] fehlgeschlagen")
     _persist(state, args)
     return "\n".join(lines)
 
@@ -484,7 +484,7 @@ async def _status_loop(state, notifier, interval: float) -> None:
         except Exception:
             balance = 0.0
         top = "\n".join(
-            f"  · {s['trader_id'][:6]}… {s['pnl_usdt']:+.2f}$ ({s['trades']}t/{s['win_rate']:.0f}%)"
+            f"  · {s['trader_id']} {s['pnl_usdt']:+.2f}$ ({s['trades']}t/{s['win_rate']:.0f}%)"
             for s in stats
         ) or "  (noch keine geschlossenen Trades)"
         msg = (
