@@ -197,11 +197,13 @@ def _handle_open(
     sig: CopySignal, state: dict,
     args: argparse.Namespace, notifier, monitor: CopyTraderMonitor,
 ) -> bool:
-    # Ein Trader darf gleichzeitig nur EINE Position haben (ueber alle Coins) —
-    # neue Signale dieses Traders werden ignoriert, solange eine offene Position
-    # mit ihm existiert.
+    # Pro Trader+Coin nur eine offene Position — mehrere Coins desselben
+    # Traders duerfen aber parallel laufen (je eigene Position).
     with state["lock"]:
-        exists = any(p["trader_id"] == sig.trader for p in state["positions"])
+        exists = any(
+            p["trader_id"] == sig.trader and p["coin"] == sig.coin
+            for p in state["positions"]
+        )
     if exists:
         logger.info(f"[LIVE] OPEN {sig.coin} uebersprungen — bereits Position mit {sig.trader}")
         return False
@@ -276,7 +278,28 @@ def _handle_close(
     if match is None:
         return False
 
-    sell = ex.market_sell(match["symbol"], match["qty"],
+    # Alt-Positionen koennen noch auf ein anderes Quote-Asset lauten (z.B. USDT),
+    # das fuer dieses Konto gesperrt ist -> auf das aktuelle Handelspaar mappen.
+    symbol = _force_quote(match["symbol"])
+    qty = float(match["qty"])
+    held = _held_qty(symbol)
+
+    # Gebuehren kosten hoechstens Promille des Bestands — fehlt fast alles,
+    # steht die Position nur im Buch (z.B. aus einem DRY_RUN-Lauf).
+    if held is not None and held < qty * 0.1:
+        msg = (f"⚠️ CLOSE {sig.coin}: Coin liegt nicht im Konto "
+               f"(Buch {qty:.8f}, real {held:.8f}) — Position aus dem Buch entfernt.")
+        logger.warning(f"[LIVE] {msg}")
+        notifier.send(msg)
+        with state["lock"]:
+            if match in state["positions"]:
+                state["positions"].remove(match)
+        return True
+
+    if held is not None:
+        qty = min(qty, held)  # Kaufgebuehr wird im Base-Asset abgezogen
+
+    sell = ex.market_sell(symbol, qty,
                           trader=match["trader_id"], coin=match["coin"])
     if not sell.ok or sell.qty <= 0:
         msg = f"❌ CLOSE {sig.coin} fehlgeschlagen: {sell.reason}"
@@ -321,10 +344,10 @@ def _handle_close(
 def _follow_trader(trader_id: str, usdt: float, *, monitor: CopyTraderMonitor) -> str:
     trader_id = trader_id.strip()
     if not trader_id:
-        return "Trader-ID fehlt — Nutzung: /follow <TRADER_ID> <BETRAG_USDT>"
+        return "Trader-ID fehlt — Nutzung: /follow <TRADER_ID> [BETRAG_USDT]"
     monitor.follow(trader_id, usdt)
-    return (f"✅ Trader {trader_id} abonniert — ${usdt:.2f}/Trade. "
-            f"Seine naechste frische Position wird kopiert (max. 1 gleichzeitig).")
+    return (f"✅ Trader {trader_id} wird auto-kopiert — ${usdt:.2f} pro Coin. "
+            f"Jede frische Long-Position wird gekauft, sein Close verkauft.")
 
 
 def _unfollow_trader(trader_id: str, *, monitor: CopyTraderMonitor) -> str:
@@ -447,10 +470,25 @@ def _cmd_get_all_balances() -> dict[str, float]:
 
 
 def info_base(symbol: str) -> str:
-    return symbol.replace("USDT", "").replace("USD", "").replace("BUSD", "")
+    s = symbol.upper()
+    for suf in _QUOTE_SUFFIXES:
+        if s.endswith(suf):
+            return s[: -len(suf)]
+    return s
 
 
 _QUOTE_SUFFIXES = ("USDT", "USDC", "BUSD", "FDUSD")
+
+
+def _held_qty(symbol: str) -> Optional[float]:
+    """Tatsaechlich freier Bestand des Base-Assets; None wenn nicht ermittelbar."""
+    if ex.DRY_RUN:
+        return None
+    try:
+        return float(ex.get_all_balances().get(info_base(symbol), 0.0))
+    except Exception as e:
+        logger.warning(f"[LIVE] Bestand fuer {symbol} nicht abrufbar ({e})")
+        return None
 
 
 def _quote_asset_for(symbol: str) -> str:

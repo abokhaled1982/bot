@@ -317,6 +317,12 @@ def _round_step(value: float, step: float) -> float:
     return float((dv / ds).to_integral_value(rounding=ROUND_DOWN) * ds)
 
 
+def _fmt(value: float) -> str:
+    """Plain-Decimal-String — Binance lehnt wissenschaftliche Notation ab (-1100)."""
+    d = Decimal(str(value))
+    return format(d.normalize(), "f") if d else "0"
+
+
 # ── Idempotente Client-Order-ID ───────────────────────────────────────────────
 def make_client_order_id(trader: str, coin: str, side: str,
                          bucket_seconds: int = 60) -> str:
@@ -442,7 +448,7 @@ def market_buy(symbol: str, usdt_amount: float,
         "symbol":            symbol,
         "side":              "BUY",
         "type":              "MARKET",
-        "quantity":          qty,
+        "quantity":          _fmt(qty),
         "newClientOrderId":  client_id,
         "newOrderRespType":  "FULL",
     }
@@ -499,7 +505,7 @@ def market_sell(symbol: str, qty: float, trader: str = "", coin: str = "") -> Ex
         "symbol":           symbol,
         "side":             "SELL",
         "type":             "MARKET",
-        "quantity":         qty,
+        "quantity":         _fmt(qty),
         "newClientOrderId": client_id,
         "newOrderRespType": "FULL",
     }
@@ -552,10 +558,10 @@ def place_oco_exit(symbol: str, qty: float, entry_price: float) -> ExecutionResu
     params = {
         "symbol":               symbol,
         "side":                 "SELL",
-        "quantity":             qty,
-        "price":                tp,
-        "stopPrice":            sl,
-        "stopLimitPrice":       sl_limit,
+        "quantity":             _fmt(qty),
+        "price":                _fmt(tp),
+        "stopPrice":            _fmt(sl),
+        "stopLimitPrice":       _fmt(sl_limit),
         "stopLimitTimeInForce": "GTC",
     }
     try:

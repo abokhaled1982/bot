@@ -24,7 +24,20 @@ WEBHOOK_URL="http://127.0.0.1:${CMD_PORT}/wa"
 # WHATSAPP_TO=... ./bot.sh start ueberschrieben werden.
 WHATSAPP_TO="${WHATSAPP_TO:-120363429746414084@g.us}"
 
-BOT_ARGS=(--status-interval 0)
+# Handelsgroesse pro Coin und Risiko-Limits — vor dem Aufruf ueberschreibbar,
+# z.B.  SIZE_USDT=1 MIN_BALANCE=1 ./bot.sh start
+SIZE_USDT="${SIZE_USDT:-10}"
+MIN_BALANCE="${MIN_BALANCE:-5}"
+MAX_POSITIONS="${MAX_POSITIONS:-3}"
+MAX_DAILY_LOSS="${MAX_DAILY_LOSS:-5}"
+
+BOT_ARGS=(
+    --status-interval 0
+    --size-usdt "$SIZE_USDT"
+    --min-balance-usdt "$MIN_BALANCE"
+    --max-positions "$MAX_POSITIONS"
+    --max-daily-loss-usd "$MAX_DAILY_LOSS"
+)
 
 BRIDGE_PID_FILE="$LOG_DIR/bridge.pid"
 BOT_PID_FILE="$LOG_DIR/bot.pid"
@@ -224,6 +237,7 @@ start_bot() {
     save_ports
     rotate_log "$BOT_LOG"
     info "Starte Bot (Cmd-Port $CMD_PORT) → Log: $BOT_LOG (WHATSAPP_TO=$WHATSAPP_TO)"
+    info "  Einsatz \$${SIZE_USDT}/Coin | maxPos $MAX_POSITIONS | minBalance \$${MIN_BALANCE} | maxDailyLoss \$${MAX_DAILY_LOSS}"
     (
         cd "$REPO_ROOT"
         WHATSAPP_BRIDGE_URL="$BRIDGE_URL" \
@@ -320,7 +334,13 @@ bot.sh — WhatsApp-Bridge + Copy-Trader Prozessmanager
   ./bot.sh logs [bridge|bot]     Live-Logs (Default: beide)
 
   Ueberschreibbare Env-Variablen (vor dem Aufruf setzen):
-    WHATSAPP_TO   Empfaenger-ID (Default: $WHATSAPP_TO)
+    WHATSAPP_TO     Empfaenger-ID (Default: $WHATSAPP_TO)
+    SIZE_USDT       Einsatz pro Coin (Default: $SIZE_USDT)
+    MIN_BALANCE     Mindestguthaben fuer neue Kaeufe (Default: $MIN_BALANCE)
+    MAX_POSITIONS   Max. gleichzeitig offene Positionen (Default: $MAX_POSITIONS)
+    MAX_DAILY_LOSS  Tagesverlust-Limit in USD (Default: $MAX_DAILY_LOSS)
+
+  Beispiel Mini-Start:  SIZE_USDT=6 MIN_BALANCE=6 MAX_POSITIONS=1 ./bot.sh start
 
   Logs: $BRIDGE_LOG , $BOT_LOG
 EOF

@@ -20,7 +20,7 @@ Kommandos (fuehrendes `/` oder `!` optional, case-insensitive):
   close <COIN> [TRADER]            Schliesst Position(en) auf COIN
   copy <TRADER> <COIN> <USDT>      Kauf im Namen des Traders
   copyclose <TRADER> <COIN>        Schliesst Copy-Position dieses Traders
-  follow <TRADER> <USDT>           Trader abonnieren (kopiert dessen naechste frische Position)
+  follow <TRADER> [USDT]           Trader auto-kopieren (jede frische Position, je Coin)
   unfollow <TRADER>                Trader deabonnieren
   following                        Abonnierte Trader + Betrag + Status
   stop                             touch STOP_BOT (blockt neue Opens)
@@ -32,7 +32,12 @@ import json
 import os
 from typing import Callable, Optional
 
+from dotenv import load_dotenv
 from loguru import logger
+
+# Unabhaengig von der Import-Reihenfolge des Entry-Points: sonst steht
+# QUOTE_ASSET auf dem Default, wenn .env noch nicht geladen wurde.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".env"))
 
 STOP_FILE = "STOP_BOT"
 QUOTE_ASSET = os.getenv("QUOTE_ASSET", "USDT").strip().upper() or "USDT"
@@ -66,7 +71,7 @@ HELP_TEXT = (
     "  /close <COIN> [TRADER]         Position schliessen\n"
     "  /copy <TRADER> <COIN> <USDT>   Kauf im Namen des Traders\n"
     "  /copyclose <TRADER> <COIN>     Copy-Position des Traders schliessen\n"
-    "  /follow <TRADER> <USDT>        Trader abonnieren (naechste frische Position wird kopiert)\n"
+    "  /follow <TRADER> [USDT]        Trader auto-kopieren (jede frische Position, je Coin)\n"
     "  /unfollow <TRADER>             Trader deabonnieren\n"
     "  /following                     Abonnierte Trader + Betrag + Status\n"
     "  /stop                          Neue Opens blockieren\n"
@@ -384,12 +389,12 @@ class CommandHandler:
     def cmd_follow(self, argv: list[str]) -> str:
         if self._follow is None:
             return "❌ /follow ist in diesem Modus nicht verfuegbar."
-        if len(argv) < 2:
-            return "Nutzung: /follow <TRADER_ID> <BETRAG_USDT>"
+        if not argv:
+            return "Nutzung: /follow <TRADER_ID> [BETRAG_USDT]"
         trader = argv[0].strip()
-        usdt = _parse_amount(argv[1])
+        usdt = _parse_amount(argv[1]) if len(argv) > 1 else self._default_size
         if usdt is None or usdt <= 0:
-            return "Betrag ungueltig — Nutzung: /follow <TRADER_ID> <BETRAG_USDT>"
+            return "Betrag ungueltig — Nutzung: /follow <TRADER_ID> [BETRAG_USDT]"
         return self._follow(trader, usdt)
 
     def cmd_unfollow(self, argv: list[str]) -> str:
