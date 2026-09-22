@@ -1,0 +1,222 @@
+[
+  {
+    "trader_id": "5140516231943759873",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5140516231943759873?timeRange=30D",
+    "trades": 8,
+    "wins": 7,
+    "losses": 0,
+    "pnl_usdt": 0.9419,
+    "pnl_eur": 0.8665,
+    "win_rate": 87.5,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5210034381033174528",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5210034381033174528?timeRange=30D",
+    "trades": 8,
+    "wins": 7,
+    "losses": 1,
+    "pnl_usdt": 0.8672,
+    "pnl_eur": 0.7977,
+    "win_rate": 87.5,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "4860612403464598017",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4860612403464598017?timeRange=30D",
+    "trades": 7,
+    "wins": 6,
+    "losses": 1,
+    "pnl_usdt": 0.4307,
+    "pnl_eur": 0.3962,
+    "win_rate": 85.71,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5139302274990024704",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5139302274990024704?timeRange=30D",
+    "trades": 2,
+    "wins": 2,
+    "losses": 0,
+    "pnl_usdt": 0.2892,
+    "pnl_eur": 0.2662,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "3769371690948972545",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/3769371690948972545?timeRange=30D",
+    "trades": 5,
+    "wins": 4,
+    "losses": 0,
+    "pnl_usdt": 0.2409,
+    "pnl_eur": 0.2216,
+    "win_rate": 80.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5076852441659065088",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5076852441659065088?timeRange=30D",
+    "trades": 5,
+    "wins": 3,
+    "losses": 2,
+    "pnl_usdt": 0.2052,
+    "pnl_eur": 0.1886,
+    "win_rate": 60.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "4993059761199694592",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4993059761199694592?timeRange=30D",
+    "trades": 6,
+    "wins": 5,
+    "losses": 1,
+    "pnl_usdt": 0.196,
+    "pnl_eur": 0.1802,
+    "win_rate": 83.33,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5064134995913274113",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5064134995913274113?timeRange=30D",
+    "trades": 4,
+    "wins": 3,
+    "losses": 0,
+    "pnl_usdt": 0.16,
+    "pnl_eur": 0.1472,
+    "win_rate": 75.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5210774756206611712",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5210774756206611712?timeRange=30D",
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "pnl_usdt": 0.1307,
+    "pnl_eur": 0.1203,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "3762436459297612801",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/3762436459297612801?timeRange=30D",
+    "trades": 2,
+    "wins": 2,
+    "losses": 0,
+    "pnl_usdt": 0.1297,
+    "pnl_eur": 0.1194,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5123905101728837377",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5123905101728837377?timeRange=30D",
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "pnl_usdt": 0.0927,
+    "pnl_eur": 0.0852,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "4751039637269778176",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4751039637269778176?timeRange=30D",
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "pnl_usdt": 0.0069,
+    "pnl_eur": 0.0063,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "4904114645412812033",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4904114645412812033?timeRange=30D",
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "pnl_usdt": 0.0051,
+    "pnl_eur": 0.0047,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5163371857512673024",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5163371857512673024?timeRange=30D",
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "pnl_usdt": 0.0022,
+    "pnl_eur": 0.002,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5005711431659656960",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5005711431659656960?timeRange=30D",
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "pnl_usdt": 0.0021,
+    "pnl_eur": 0.0019,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "4750349711832016384",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/4750349711832016384?timeRange=30D",
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "pnl_usdt": 0.0017,
+    "pnl_eur": 0.0016,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5143210087632721408",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5143210087632721408?timeRange=30D",
+    "trades": 2,
+    "wins": 1,
+    "losses": 1,
+    "pnl_usdt": -0.0036,
+    "pnl_eur": -0.0033,
+    "win_rate": 50.0,
+    "verdict": "HURTFUL"
+  },
+  {
+    "trader_id": "5074036755083609600",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5074036755083609600?timeRange=30D",
+    "trades": 1,
+    "wins": 0,
+    "losses": 1,
+    "pnl_usdt": -0.0195,
+    "pnl_eur": -0.0179,
+    "win_rate": 0.0,
+    "verdict": "HURTFUL"
+  },
+  {
+    "trader_id": "5219975520332534272",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5219975520332534272?timeRange=30D",
+    "trades": 1,
+    "wins": 0,
+    "losses": 1,
+    "pnl_usdt": -0.0424,
+    "pnl_eur": -0.039,
+    "win_rate": 0.0,
+    "verdict": "HURTFUL"
+  },
+  {
+    "trader_id": "5225071800210551296",
+    "trader_url": "https://www.binance.com/en/copy-trading/lead-details/5225071800210551296?timeRange=30D",
+    "trades": 1,
+    "wins": 0,
+    "losses": 1,
+    "pnl_usdt": -0.3106,
+    "pnl_eur": -0.2857,
+    "win_rate": 0.0,
+    "verdict": "HURTFUL"
+  }
+]
