@@ -11,5 +11,18 @@
     "trades": 0,
     "added_at": 1788715088.12355,
     "updated_at": 1790102900.597432
+  },
+  {
+    "wallet": "5076852441659065088",
+    "size_usdt": 10.0,
+    "is_copied": 1,
+    "is_focus": 0,
+    "note": "",
+    "source": "dashboard",
+    "account_usd": 0.0,
+    "win_rate": 0.0,
+    "trades": 0,
+    "added_at": 1790108799.1433058,
+    "updated_at": 1790108799.1516836
   }
 ]
