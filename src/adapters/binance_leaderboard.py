@@ -992,7 +992,15 @@ class BinanceLeaderboardTrader:
             if parsed and abs(parsed["size"]) > 1e-12:
                 new_positions[parsed["coin"]] = parsed
 
-        if emit_signals:
+        if uid not in self._positions:
+            # Erster Poll = Baseline: bereits laufende Positionen nicht nachkaufen.
+            if new_positions:
+                logger.info(
+                    f"[BN-LB] 🧭 Baseline {self._short(uid)}: "
+                    f"{len(new_positions)} offene Position(en) uebersprungen "
+                    f"({', '.join(sorted(new_positions))})"
+                )
+        elif emit_signals:
             self._diff_positions(uid, new_positions)
         self._positions[uid] = new_positions
 
