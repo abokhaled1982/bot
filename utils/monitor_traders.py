@@ -5,6 +5,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import sys
+
+# Direktstart (`python3 utils/monitor_traders.py`) kennt das Repo-Root sonst nicht.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 os.environ.setdefault("BNLB_AUTO_DISCOVER", "False")
 os.environ.setdefault("BNLB_EMIT_AUTO_SIGNALS", "True")

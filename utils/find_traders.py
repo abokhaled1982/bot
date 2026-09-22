@@ -18,12 +18,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.adapters.binance_leaderboard import (
+# Direktstart (`python3 utils/find_traders.py`) kennt das Repo-Root sonst nicht.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from src.adapters.binance_leaderboard import (  # noqa: E402
     binance_leaderboard_url, find_intraday_traders,
 )
 

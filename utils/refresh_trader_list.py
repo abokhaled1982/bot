@@ -7,13 +7,20 @@ optional wird die alte `copy_traders`-Tabelle vorher geleert.
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 import time
 
-from src.adapters.binance_leaderboard import (
+# Direktstart (`python3 utils/refresh_trader_list.py`) kennt das Repo-Root sonst nicht.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from src.adapters.binance_leaderboard import (  # noqa: E402
     binance_leaderboard_url,
     find_intraday_traders,
 )
-from src.utils import trader_store
+from src.utils import trader_store  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
