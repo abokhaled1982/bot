@@ -1,1 +1,32 @@
-[]
+[
+  {
+    "trader_id": "5041579634804156928",
+    "trader_win_rate": 0.0,
+    "coin": "ZEC",
+    "symbol": "ZECUSDC",
+    "side": "LONG",
+    "size_usdt": 5.83284,
+    "entry_price": 1458.21,
+    "entry_price_trader": 1472.9687179487182,
+    "qty": 0.004,
+    "order_id": "745816183",
+    "client_id": "copy_2e02d43b310ab8d0",
+    "opened_at": 1790044774.73807,
+    "opened_at_iso": "2026-09-22T04:39:34+02:00"
+  },
+  {
+    "trader_id": "5041579634804156928",
+    "trader_win_rate": 0.0,
+    "coin": "SUI",
+    "symbol": "SUIUSDC",
+    "side": "LONG",
+    "size_usdt": 6.91968,
+    "entry_price": 1.0176,
+    "entry_price_trader": 1.024,
+    "qty": 6.8,
+    "order_id": "3282614753",
+    "client_id": "copy_b583e2abb5d623c9",
+    "opened_at": 1790057220.589436,
+    "opened_at_iso": "2026-09-22T08:07:00+02:00"
+  }
+]

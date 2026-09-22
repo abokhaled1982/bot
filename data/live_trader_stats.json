@@ -1,1 +1,22 @@
-[]
+[
+  {
+    "trader_id": "MANUAL",
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "pnl_usdt": 0.0067,
+    "pnl_eur": 0.0062,
+    "win_rate": 100.0,
+    "verdict": "HELPFUL"
+  },
+  {
+    "trader_id": "5041579634804156928",
+    "trades": 2,
+    "wins": 0,
+    "losses": 2,
+    "pnl_usdt": -0.1523,
+    "pnl_eur": -0.1401,
+    "win_rate": 0.0,
+    "verdict": "HURTFUL"
+  }
+]

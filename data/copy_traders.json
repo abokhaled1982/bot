@@ -1,7 +1,7 @@
 [
   {
     "wallet": "5041579634804156928",
-    "size_usdt": 7.0,
+    "size_usdt": 20.0,
     "is_copied": 1,
     "is_focus": 0,
     "note": "",
@@ -10,6 +10,6 @@
     "win_rate": 0.0,
     "trades": 0,
     "added_at": 1788715088.12355,
-    "updated_at": 1790020480.6813943
+    "updated_at": 1790102900.597432
   }
 ]
