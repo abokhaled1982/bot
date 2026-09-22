@@ -16,7 +16,7 @@ Kommandos (fuehrendes `/` oder `!` optional, case-insensitive):
   trader <ID>                      Status eines Traders: Position + letzte Records
   price <COIN>                     Aktueller Marktpreis
   buy <COIN> <USDT>                Direkter Kauf, Position-Tag "MANUAL"
-  sell <COIN>                      MANUAL-Position auf COIN schliessen
+  sell <COIN>                      Gesamten Coin-Bestand nach QUOTE_ASSET verkaufen
   close <COIN> [TRADER]            Schliesst Position(en) auf COIN
   copy <TRADER> <COIN> <USDT>      Kauf im Namen des Traders
   copyclose <TRADER> <COIN>        Schliesst Copy-Position dieses Traders
@@ -54,6 +54,7 @@ StateProvider = Callable[[], dict]
 TradersProv   = Callable[[], dict]
 FollowFn      = Callable[[str, float], str]   # (trader, usdt) -> msg
 UnfollowFn    = Callable[[str], str]          # (trader) -> msg
+SellAllFn     = Callable[[str], str]          # (coin) -> msg
 
 
 HELP_TEXT = (
@@ -67,7 +68,7 @@ HELP_TEXT = (
     "  /simtop [N]                    Top-N Sim-Trader (data/sim_trader_stats.json)\n"
     "  /price <COIN>                  Marktpreis\n"
     "  /buy <COIN> <USDT>             Direkter Kauf (Tag: MANUAL)\n"
-    "  /sell <COIN>                   MANUAL-Position schliessen\n"
+    f"  /sell <COIN>                   Ganzen Coin-Bestand nach {QUOTE_ASSET} verkaufen\n"
     "  /close <COIN> [TRADER]         Position schliessen\n"
     "  /copy <TRADER> <COIN> <USDT>   Kauf im Namen des Traders\n"
     "  /copyclose <TRADER> <COIN>     Copy-Position des Traders schliessen\n"
@@ -114,6 +115,7 @@ class CommandHandler:
         unfollow_trader: Optional[UnfollowFn] = None,
         get_all_balances: Optional[AllBalancesFn] = None,
         trader_focus: Optional[TraderFocusFn] = None,
+        sell_all: Optional[SellAllFn] = None,
     ) -> None:
         self._state = state_provider
         self._traders = traders_provider
@@ -126,6 +128,7 @@ class CommandHandler:
         self._unfollow = unfollow_trader
         self._all_balances = get_all_balances
         self._trader_focus = trader_focus
+        self._sell_all = sell_all
 
     # ── Dispatcher ────────────────────────────────────────────────────────────
     def dispatch(self, text: str, source: str = "console") -> str:
@@ -347,8 +350,10 @@ class CommandHandler:
 
     def cmd_sell(self, argv: list[str]) -> str:
         if not argv:
-            return "Nutzung: /sell <COIN>"
+            return f"Nutzung: /sell <COIN>  (verkauft den ganzen Bestand nach {QUOTE_ASSET})"
         coin = argv[0].upper()
+        if self._sell_all is not None:
+            return self._sell_all(coin)
         return self._close(coin, "MANUAL", "MANUAL_SELL")
 
     def cmd_close(self, argv: list[str]) -> str:

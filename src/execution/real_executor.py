@@ -55,6 +55,8 @@ STOP_LOSS_PCT   = float(os.getenv("BINANCE_STOP_LOSS_PCT",   "2.0"))
 TAKE_PROFIT_PCT = float(os.getenv("BINANCE_TAKE_PROFIT_PCT", "1.5"))
 
 # Business-Fehlercodes, die NICHT retried werden.
+INSUFFICIENT_BALANCE = -2010
+DUST_BELOW_MINIMUM = -1013   # eigener Marker: Menge/Wert unter Binance-Minimum
 _NON_RETRYABLE = {
     -1013,  # Filter failure
     -1021,  # Timestamp for this request outside recvWindow (wir korrigieren via serverTime)
@@ -372,6 +374,27 @@ def get_price(symbol: str) -> float | None:
         return None
 
 
+def cancel_open_orders(symbol: str) -> int:
+    """Offene Orders (inkl. OCO-Exit) stornieren — sonst ist der Bestand gesperrt."""
+    if DRY_RUN:
+        return 0
+    try:
+        data = _request("DELETE", "/api/v3/openOrders", {"symbol": symbol}, signed=True)
+    except BinanceAPIError as e:
+        if e.code == -2011:  # "Unknown order sent" = es gab nichts zu stornieren
+            return 0
+        logger.warning(f"[EXEC] cancel open orders {symbol}: {e}")
+        return 0
+    except Exception as e:
+        logger.warning(f"[EXEC] cancel open orders {symbol}: {e}")
+        return 0
+    orders = data.get("data") if isinstance(data.get("data"), list) else [data]
+    n = len(orders)
+    if n:
+        logger.info(f"[EXEC] {n} offene Order(s) auf {symbol} storniert")
+    return n
+
+
 def get_order(symbol: str, order_id: Optional[str] = None,
               client_order_id: Optional[str] = None) -> dict:
     params: dict[str, Any] = {"symbol": symbol}
@@ -405,6 +428,62 @@ def _reject(symbol: str, reason: str, action: str = "BUY",
             code: Optional[int] = None) -> ExecutionResult:
     logger.warning(f"[EXEC] ❌ {action} {symbol} reject: {reason}")
     return ExecutionResult(ok=False, action=action, symbol=symbol,
+                           reason=reason, error_code=code)
+
+
+def _asset_balance(asset: str) -> tuple[Optional[float], Optional[float]]:
+    """(free, locked) eines Assets; (None, None) wenn nicht abrufbar."""
+    try:
+        data = _request("GET", "/api/v3/account", signed=True)
+    except Exception:
+        return None, None
+    for b in data.get("balances", []):
+        if b["asset"] == asset:
+            return float(b.get("free", 0)), float(b.get("locked", 0))
+    return 0.0, 0.0
+
+
+def get_open_orders(symbol: str) -> list[dict]:
+    try:
+        data = _request("GET", "/api/v3/openOrders", {"symbol": symbol}, signed=True)
+    except Exception as e:
+        logger.debug(f"[EXEC] openOrders({symbol}): {e}")
+        return []
+    orders = data.get("data")
+    return orders if isinstance(orders, list) else [data]
+
+
+def _reject_sell(symbol: str, reason: str, info: dict, qty: float,
+                 code: Optional[int] = None, price: float = 0.0) -> ExecutionResult:
+    """SELL-Fehlschlag mit vollem Kontext loggen — die Extra-Calls lohnen hier."""
+    base = info.get("baseAsset") or symbol
+    price = price or (get_price(symbol) or 0.0)
+    free, locked = (None, None) if DRY_RUN else _asset_balance(base)
+    orders = [] if DRY_RUN else get_open_orders(symbol)
+
+    held = ("nicht abrufbar" if free is None
+            else f"frei {free:.8f} / gesperrt {locked:.8f} {base}")
+    if orders:
+        detail = ", ".join(
+            f"{o.get('side', '?')} {o.get('type', '?')} {o.get('origQty', '?')}"
+            f"@{o.get('price', '?')} (id {o.get('orderId', '?')})"
+            for o in orders[:3]
+        )
+        order_line = f"{len(orders)} offen → {detail}"
+    else:
+        order_line = "keine"
+
+    logger.error(
+        f"[EXEC] ❌ SELL {symbol} fehlgeschlagen: {reason}"
+        f"{f' (code {code})' if code is not None else ''}\n"
+        f"         verkaufen wollten wir: {_fmt(qty)} {base} ≈ ${qty * price:.2f}\n"
+        f"         im Konto:              {held}\n"
+        f"         offene Orders:         {order_line}\n"
+        f"         Binance-Limits:        minQty {info.get('minQty')}, "
+        f"stepSize {info.get('stepSize')}, minNotional ${info.get('minNotional')}\n"
+        f"         Preis {symbol}:        ${price:.8f}   status={info.get('status')}"
+    )
+    return ExecutionResult(ok=False, action="SELL", symbol=symbol,
                            reason=reason, error_code=code)
 
 
@@ -480,7 +559,8 @@ def market_buy(symbol: str, usdt_amount: float,
     return result
 
 
-def market_sell(symbol: str, qty: float, trader: str = "", coin: str = "") -> ExecutionResult:
+def market_sell(symbol: str, qty: float, trader: str = "", coin: str = "",
+                _attempt: int = 0) -> ExecutionResult:
     """Market-SELL der gesamten (oder Teil-)Menge. Fuer manuelles Close / Trader-Close."""
     info = get_symbol_info(symbol)
     if not info:
@@ -488,12 +568,26 @@ def market_sell(symbol: str, qty: float, trader: str = "", coin: str = "") -> Ex
 
     qty = _round_step(qty, info["stepSize"])
     if qty <= 0:
-        return _reject(symbol, "qty rounds to zero", action="SELL")
+        return _reject_sell(symbol, "Menge rundet auf 0 (stepSize)", info, qty)
 
-    client_id = make_client_order_id(trader or "n/a", coin or symbol, "SELL")
+    base = info.get("baseAsset") or symbol
+    price = get_price(symbol) or 0.0
+    if qty < info["minQty"]:
+        return _reject_sell(symbol, f"Staub: {qty} {base} < minQty {info['minQty']} — "
+                                    f"Binance nimmt die Order nicht an",
+                            info, qty, code=DUST_BELOW_MINIMUM, price=price)
+    if price and qty * price < info["minNotional"]:
+        return _reject_sell(symbol, f"Staub: nur ${qty * price:.2f} wert, Binance-Minimum "
+                                    f"${info['minNotional']:.2f} (NOTIONAL) — nachkaufen oder "
+                                    f"in der Binance-App zu BNB konvertieren",
+                            info, qty, code=DUST_BELOW_MINIMUM, price=price)
+
+    # Retry braucht eine andere clientOrderId, sonst lehnt Binance sie als Dublette ab.
+    client_id = make_client_order_id(
+        trader or "n/a", coin or symbol, "SELL" if not _attempt else f"SELL{_attempt}",
+    )
 
     if DRY_RUN:
-        price = get_price(symbol) or 0.0
         logger.success(f"[EXEC] 📝 DRY SELL {symbol} qty={qty:.6f} price≈${price:.6f}")
         return ExecutionResult(
             ok=True, action="SELL", symbol=symbol, qty=qty, price=price,
@@ -509,12 +603,16 @@ def market_sell(symbol: str, qty: float, trader: str = "", coin: str = "") -> Ex
         "newClientOrderId": client_id,
         "newOrderRespType": "FULL",
     }
+    logger.info(f"[EXEC] SELL {symbol} qty={_fmt(qty)} {base} ≈${qty * price:.2f} "
+                f"client={client_id} versuch={_attempt + 1}")
     try:
         data = _request("POST", "/api/v3/order", params, signed=True)
     except BinanceAPIError as e:
-        return _reject(symbol, e.msg, action="SELL", code=e.code)
+        if e.code == INSUFFICIENT_BALANCE and _attempt == 0:
+            return _sell_retry_with_free_balance(symbol, qty, info, trader, coin)
+        return _reject_sell(symbol, e.msg, info, qty, code=e.code, price=price)
     except TransientError as e:
-        return _reject(symbol, f"transient: {e}", action="SELL")
+        return _reject_sell(symbol, f"Netz-/Serverproblem: {e}", info, qty, price=price)
 
     order_id = str(data.get("orderId", ""))
     status = data.get("status", "")
@@ -526,14 +624,49 @@ def market_sell(symbol: str, qty: float, trader: str = "", coin: str = "") -> Ex
     exec_quote = float(data.get("cummulativeQuoteQty", 0.0))
     avg_price = (exec_quote / exec_qty) if exec_qty else 0.0
 
-    ok = status in {"FILLED", "PARTIALLY_FILLED"}
+    if status not in {"FILLED", "PARTIALLY_FILLED"}:
+        return _reject_sell(symbol, f"Order endete als {status or 'unbekannt'} "
+                                    f"(orderId {order_id}, ausgefuehrt {exec_qty})",
+                            info, qty, price=price)
+
     result = ExecutionResult(
-        ok=ok, action="SELL", symbol=symbol, qty=exec_qty, price=avg_price,
+        ok=True, action="SELL", symbol=symbol, qty=exec_qty, price=avg_price,
         total_usdt=exec_quote, order_id=order_id, client_id=client_id,
         status=status, raw=data,
     )
-    logger.log("SUCCESS" if ok else "ERROR", result.summary())
+    logger.success(result.summary())
     return result
+
+
+def _sell_retry_with_free_balance(symbol: str, qty: float, info: dict,
+                                  trader: str, coin: str) -> ExecutionResult:
+    """-2010 heisst meist: Menge steckt noch in einer offenen Order. Loesen und erneut."""
+    cancel_open_orders(symbol)
+    time.sleep(0.5)  # Binance braucht einen Moment, bis locked -> free gebucht ist
+    base = info.get("baseAsset") or ""
+    free = _round_step(min(qty, get_account_balance(base)), info["stepSize"])
+    if free <= 0 or free < info["minQty"]:
+        return _reject_sell(symbol, f"kein freier {base}-Bestand nach Order-Storno",
+                            info, qty, code=INSUFFICIENT_BALANCE)
+    logger.warning(f"[EXEC] SELL {symbol} war gesperrt — Orders storniert, "
+                   f"neuer Versuch mit freiem Bestand {_fmt(free)} {base}")
+    return market_sell(symbol, free, trader=trader, coin=coin, _attempt=1)
+
+
+def sell_all(symbol: str, trader: str = "", coin: str = "") -> ExecutionResult:
+    """Kompletten freien Bestand des Base-Assets marktverkaufen (storniert vorher OCO)."""
+    info = get_symbol_info(symbol)
+    if not info:
+        return _reject(symbol, "symbol info unavailable", action="SELL")
+
+    cancel_open_orders(symbol)
+    base = info.get("baseAsset") or symbol
+    free = get_account_balance(base)
+    if free <= 0:
+        return _reject_sell(symbol, f"kein freier {base}-Bestand", info, 0.0,
+                            code=INSUFFICIENT_BALANCE)
+
+    return market_sell(symbol, free, trader=trader, coin=coin)
 
 
 def place_oco_exit(symbol: str, qty: float, entry_price: float) -> ExecutionResult:

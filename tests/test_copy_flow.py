@@ -56,6 +56,15 @@ class FakeExchange:
         self.sell_ok = True
         self.balance = 10_000.0
         self.holdings: dict[str, float] = {}   # Base-Asset -> wirklich gehaltene Menge
+        self.locked: dict[str, float] = {}     # davon im OCO-Exit gesperrt
+        self.canceled: list[str] = []
+
+    def _free(self, base: str) -> float:
+        return self.holdings.get(base, 0.0) - self.locked.get(base, 0.0)
+
+    def cancel_open_orders(self, symbol):
+        self.canceled.append(symbol)
+        return 1 if self.locked.pop(lc.info_base(symbol), 0.0) else 0
 
     def buy_and_protect(self, symbol, usdt_amount, trader="", coin="", price_hint=None):
         price = self.prices[symbol]
@@ -67,6 +76,9 @@ class FakeExchange:
                 reason="insufficient balance", error_code=-2010,
             ), None
         qty = usdt_amount / price
+        base = lc.info_base(symbol)
+        self.holdings[base] = self.holdings.get(base, 0.0) + qty
+        self.locked[base] = self.locked.get(base, 0.0) + qty   # OCO sperrt den Bestand
         buy = lc.ex.ExecutionResult(
             ok=True, action="BUY", symbol=symbol, qty=qty, price=price,
             total_usdt=usdt_amount, order_id="B1", client_id="cb1", status="FILLED",
@@ -77,15 +89,34 @@ class FakeExchange:
 
     def market_sell(self, symbol, qty, trader="", coin=""):
         price = self.prices[symbol]
+        base = lc.info_base(symbol)
         self.sells.append({"symbol": symbol, "qty": qty,
                            "trader": trader, "coin": coin, "price": price})
         if not self.sell_ok:
             return lc.ex.ExecutionResult(ok=False, action="SELL", symbol=symbol,
                                          reason="order rejected", error_code=-2010)
+        if self.holdings and qty > self._free(base) + 1e-12:
+            return lc.ex.ExecutionResult(
+                ok=False, action="SELL", symbol=symbol,
+                reason="Account has insufficient balance for requested action.",
+                error_code=-2010,
+            )
+        if base in self.holdings:
+            self.holdings[base] = max(0.0, self.holdings[base] - qty)
         return lc.ex.ExecutionResult(
             ok=True, action="SELL", symbol=symbol, qty=qty, price=price,
             total_usdt=qty * price, order_id="S1", client_id="cs1", status="FILLED",
         )
+
+    def sell_all(self, symbol, trader="", coin=""):
+        self.cancel_open_orders(symbol)
+        qty = self._free(lc.info_base(symbol))
+        if qty <= 0:
+            return lc.ex.ExecutionResult(
+                ok=False, action="SELL", symbol=symbol,
+                reason=f"kein freier {lc.info_base(symbol)}-Bestand", error_code=-2010,
+            )
+        return self.market_sell(symbol, qty, trader=trader, coin=coin)
 
 
 @pytest.fixture
@@ -94,6 +125,8 @@ def exchange(monkeypatch):
     monkeypatch.setattr(lc.ex, "DRY_RUN", True)
     monkeypatch.setattr(lc.ex, "buy_and_protect", fake.buy_and_protect)
     monkeypatch.setattr(lc.ex, "market_sell", fake.market_sell)
+    monkeypatch.setattr(lc.ex, "sell_all", fake.sell_all)
+    monkeypatch.setattr(lc.ex, "cancel_open_orders", fake.cancel_open_orders)
     monkeypatch.setattr(lc.ex, "get_account_balance", lambda asset="USDT": fake.balance)
     monkeypatch.setattr(lc.ex, "get_all_balances", lambda: dict(fake.holdings))
     monkeypatch.setattr(lc.ex, "get_price", lambda symbol: fake.prices.get(symbol))
@@ -570,3 +603,95 @@ def test_info_base_strips_usdc_quote(bot):
     assert lc.info_base("BTCUSDC") == "BTC"
     assert lc.info_base("BTCUSDT") == "BTC"
     assert lc.info_base("ETHFDUSD") == "ETH"
+
+
+# ── 6. Manuelles /buy und /sell ───────────────────────────────────────────────
+def _manual_handler(bot) -> CommandHandler:
+    return CommandHandler(
+        state_provider=lambda: bot.state,
+        traders_provider=dict,
+        open_manual=lambda coin, sym, usdt, trader, wr: lc._open_manual(
+            coin, sym, usdt, trader, wr,
+            state=bot.state, args=bot.args, notifier=bot.notifier,
+        ),
+        close_position=lambda coin, trader, reason: lc._close_by_coin(
+            coin, trader, reason,
+            state=bot.state, args=bot.args, notifier=bot.notifier,
+        ),
+        get_price=lc._cmd_get_price,
+        get_balance=lc._cmd_get_balance,
+        default_size_usdt=bot.args.size_usdt,
+        sell_all=lambda coin: lc._sell_all(
+            coin, state=bot.state, args=bot.args, notifier=bot.notifier,
+        ),
+    )
+
+
+def test_manual_buy_then_sell_round_trip(isolated_store, bot, monkeypatch):
+    """/buy legt Position + OCO an, /sell loest den OCO und verkauft den Bestand."""
+    monkeypatch.setattr(lc.ex, "DRY_RUN", False)
+    handler = _manual_handler(bot)
+
+    assert "OPEN LONG BTC" in handler.dispatch("/buy BTC 10")
+    assert bot.exchange.buys[0]["symbol"] == BTC_SYMBOL
+    assert bot.exchange.locked["BTC"] > 0          # OCO sperrt den Coin
+
+    reply = handler.dispatch("/sell BTC")
+
+    assert "SELL ALL BTC" in reply
+    assert bot.exchange.canceled == [BTC_SYMBOL]   # OCO wurde vorher storniert
+    assert bot.exchange.sells[0]["qty"] == pytest.approx(10.0 / 50_000.0)
+    assert bot.exchange.holdings["BTC"] == pytest.approx(0.0)
+    assert bot.state["positions"] == []
+    assert bot.state["history"][-1]["close_reason"] == "MANUAL_SELL_ALL"
+
+
+def test_sell_liquidates_coin_without_book_position(isolated_store, bot, monkeypatch):
+    """/sell verkauft auch Restbestaende, die gar nicht im Buch stehen."""
+    monkeypatch.setattr(lc.ex, "DRY_RUN", False)
+    bot.exchange.holdings = {"BTC": 0.0005}
+    handler = _manual_handler(bot)
+
+    assert "SELL ALL BTC" in handler.dispatch("/sell BTC")
+    assert bot.exchange.sells[0]["qty"] == pytest.approx(0.0005)
+    assert bot.state["history"] == []
+
+
+def test_close_cancels_oco_before_selling(isolated_store, bot, monkeypatch):
+    """Copy-Close muss den OCO loesen — sonst ist der Coin gesperrt (-2010)."""
+    monkeypatch.setattr(lc.ex, "DRY_RUN", False)
+    _book_position(bot, symbol=BTC_SYMBOL, qty=0.0002)
+    bot.exchange.holdings = {"BTC": 0.0002}
+    bot.exchange.locked = {"BTC": 0.0002}
+
+    assert lc._handle_close(CLOSE_SIG, bot.state, bot.args, bot.notifier) is True
+    assert bot.exchange.canceled == [BTC_SYMBOL]
+    assert bot.exchange.sells[0]["qty"] == pytest.approx(0.0002)
+    assert bot.state["positions"] == []
+
+
+def test_sell_reports_failure_when_nothing_is_held(isolated_store, bot, monkeypatch):
+    """Ohne Bestand gibt /sell eine klare Fehlermeldung statt einer Order."""
+    monkeypatch.setattr(lc.ex, "DRY_RUN", False)
+    handler = _manual_handler(bot)
+
+    reply = handler.dispatch("/sell BTC")
+
+    assert reply.startswith("❌ SELL BTC fehlgeschlagen")
+    assert bot.exchange.sells == []
+
+
+def test_unsellable_dust_frees_the_position_slot(isolated_store, bot, monkeypatch):
+    """Unter Binance-Minimum laesst sich nichts verkaufen -> Slot darf nicht blockiert bleiben."""
+    monkeypatch.setattr(lc.ex, "DRY_RUN", False)
+    _book_position(bot, symbol=BTC_SYMBOL, qty=0.0002)
+    bot.exchange.holdings = {"BTC": 0.0002}
+    monkeypatch.setattr(lc.ex, "market_sell", lambda *a, **k: lc.ex.ExecutionResult(
+        ok=False, action="SELL", symbol=BTC_SYMBOL,
+        reason="Staub: nur $3.00 wert, Binance-Minimum $5.00 (NOTIONAL)",
+        error_code=lc.ex.DUST_BELOW_MINIMUM,
+    ))
+
+    assert lc._handle_close(CLOSE_SIG, bot.state, bot.args, bot.notifier) is True
+    assert bot.state["positions"] == []
+    assert any("Rest bleibt im Konto" in m for m in bot.notifier.messages)

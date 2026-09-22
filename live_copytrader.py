@@ -282,6 +282,9 @@ def _handle_close(
     # das fuer dieses Konto gesperrt ist -> auf das aktuelle Handelspaar mappen.
     symbol = _force_quote(match["symbol"])
     qty = float(match["qty"])
+    # Der OCO-Exit sperrt den Bestand — ohne Storno schlaegt der SELL
+    # mit "insufficient balance" fehl.
+    _cancel_open_orders(symbol)
     held = _held_qty(symbol)
 
     # Gebuehren kosten hoechstens Promille des Bestands — fehlt fast alles,
@@ -302,7 +305,20 @@ def _handle_close(
     sell = ex.market_sell(symbol, qty,
                           trader=match["trader_id"], coin=match["coin"])
     if not sell.ok or sell.qty <= 0:
-        msg = f"❌ CLOSE {sig.coin} fehlgeschlagen: {sell.reason}"
+        # Unverkaeuflicher Staub wuerde sonst dauerhaft einen max-positions-Slot belegen.
+        if sell.error_code == ex.DUST_BELOW_MINIMUM:
+            msg = (f"⚠️ CLOSE {sig.coin} nicht moeglich: {sell.reason}\n"
+                   f"Rest bleibt im Konto — Position aus dem Buch entfernt.")
+            logger.warning(f"[LIVE] {msg}")
+            notifier.send(msg)
+            with state["lock"]:
+                if match in state["positions"]:
+                    state["positions"].remove(match)
+            return True
+        msg = (f"❌ CLOSE {sig.coin} fehlgeschlagen: {sell.reason}\n"
+               f"Symbol {symbol}, Menge {qty:.8f}"
+               f"{f', Konto {held:.8f}' if held is not None else ''}"
+               f"{f', code {sell.error_code}' if sell.error_code else ''}")
         logger.error(msg)
         notifier.send(msg)
         return False
@@ -448,6 +464,52 @@ def _close_by_coin(
     return "\n".join(lines)
 
 
+def _sell_all(
+    coin: str, *, state: dict, args: argparse.Namespace, notifier,
+) -> str:
+    """Kompletten Bestand eines Coins nach QUOTE_ASSET verkaufen (unabhaengig vom Buch)."""
+    coin = coin.upper()
+    if coin == QUOTE_ASSET:
+        return f"ℹ️ {QUOTE_ASSET} ist die Handelswaehrung — nichts zu verkaufen."
+    symbol = _force_quote(coin)
+
+    sell_fn = getattr(ex, "sell_all", None)
+    if sell_fn is None:
+        return "❌ /sell wird von diesem Executor nicht unterstuetzt."
+    sell = sell_fn(symbol, trader="MANUAL", coin=coin)
+    if not sell.ok or sell.qty <= 0:
+        return f"❌ SELL {coin} fehlgeschlagen: {sell.reason}"
+
+    exit_price = sell.price or 0.0
+    with state["lock"]:
+        matches = [p for p in state["positions"] if p["coin"] == coin]
+        for match in matches:
+            size = float(match.get("size_usdt") or 0)
+            pnl_usdt = float(match.get("qty") or 0) * exit_price - size
+            pnl_pct = (pnl_usdt / size * 100) if size > 0 else 0.0
+            state["history"].append({
+                **match,
+                "exit_price":    exit_price,
+                "pnl_pct":       round(pnl_pct, 4),
+                "pnl_usdt":      round(pnl_usdt, 4),
+                "pnl_eur":       round(pnl_usdt * args.usdt_eur_rate, 4),
+                "closed_at":     time.time(),
+                "closed_at_iso": _now_iso(),
+                "close_reason":  "MANUAL_SELL_ALL",
+            })
+            state["positions"].remove(match)
+    _persist(state, args)
+
+    msg = (
+        f"💸 SELL ALL {coin}\n"
+        f"Qty: {sell.qty:.8f} {coin} @ ${exit_price:.6f}\n"
+        f"Erloes: ${sell.total_usdt:.2f} {QUOTE_ASSET}\n"
+        f"Buch: {len(matches)} Position(en) geschlossen"
+    )
+    logger.success(f"[LIVE] {msg}")
+    return msg
+
+
 def _cmd_get_price(symbol: str) -> Optional[float]:
     try:
         return ex.get_price(symbol)
@@ -481,7 +543,7 @@ _QUOTE_SUFFIXES = ("USDT", "USDC", "BUSD", "FDUSD")
 
 
 def _held_qty(symbol: str) -> Optional[float]:
-    """Tatsaechlich freier Bestand des Base-Assets; None wenn nicht ermittelbar."""
+    """Tatsaechlich gehaltener Bestand des Base-Assets; None wenn nicht ermittelbar."""
     if ex.DRY_RUN:
         return None
     try:
@@ -489,6 +551,17 @@ def _held_qty(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning(f"[LIVE] Bestand fuer {symbol} nicht abrufbar ({e})")
         return None
+
+
+def _cancel_open_orders(symbol: str) -> int:
+    fn = getattr(ex, "cancel_open_orders", None)
+    if fn is None:
+        return 0
+    try:
+        return int(fn(symbol) or 0)
+    except Exception as e:
+        logger.warning(f"[LIVE] Orders auf {symbol} nicht stornierbar ({e})")
+        return 0
 
 
 def _quote_asset_for(symbol: str) -> str:
@@ -604,6 +677,9 @@ async def run(args: argparse.Namespace) -> None:
         unfollow_trader=lambda trader: _unfollow_trader(trader, monitor=monitor),
         get_all_balances=_cmd_get_all_balances,
         trader_focus=monitor.trader_focus,
+        sell_all=lambda coin: _sell_all(
+            coin, state=state, args=args, notifier=notifier,
+        ),
     )
     webhook = None
     if args.webhook_port > 0:
