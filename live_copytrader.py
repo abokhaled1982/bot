@@ -75,7 +75,8 @@ DEFAULT_SIZE_USDT      = 20.0
 DEFAULT_MIN_WIN_RATE   = 80.0
 DEFAULT_MIN_COPY_USD   = 50.0
 DEFAULT_USDT_EUR       = 0.92
-DEFAULT_MAX_POS        = 5
+DEFAULT_MAX_POS        = 10
+DEFAULT_MAX_POS_TRADER = 3
 DEFAULT_MAX_DAILY_LOSS = 30.0
 DEFAULT_MIN_BALANCE    = 15.0
 STOP_FILE              = "STOP_BOT"
@@ -181,11 +182,19 @@ def _persist(state: dict, args: argparse.Namespace) -> None:
 
 
 # ── Risiko-Gates ──────────────────────────────────────────────────────────────
-def _blocked_reason(state: dict, args: argparse.Namespace) -> str:
+def _blocked_reason(
+    state: dict, args: argparse.Namespace, trader_id: str = "",
+) -> str:
     if os.path.exists(STOP_FILE):
         return f"STOP_BOT-Datei vorhanden ({STOP_FILE})"
     if len(state["positions"]) >= args.max_positions:
         return f"max positions ({args.max_positions}) erreicht"
+    per_trader = getattr(args, "max_positions_per_trader", DEFAULT_MAX_POS_TRADER)
+    if trader_id:
+        with state["lock"]:
+            mine = sum(1 for p in state["positions"] if p["trader_id"] == trader_id)
+        if mine >= per_trader:
+            return f"max positions pro Trader ({per_trader}) erreicht"
     day_pnl = _daily_realized_pnl(state["history"])
     if day_pnl <= -abs(args.max_daily_loss_usd):
         return f"tagesloss {day_pnl:+.2f} USDT ueberschritten"
@@ -207,7 +216,7 @@ def _handle_open(
     if exists:
         logger.info(f"[LIVE] OPEN {sig.coin} uebersprungen — bereits Position mit {sig.trader}")
         return False
-    reason = _blocked_reason(state, args)
+    reason = _blocked_reason(state, args, sig.trader)
     if reason:
         logger.warning(f"[LIVE] OPEN {sig.coin} geblockt: {reason}")
         notifier.send(f"⛔ OPEN {sig.coin} geblockt: {reason}")
@@ -390,7 +399,7 @@ def _open_manual(
         return f"ℹ️ Position {coin} [{trader_id}] existiert bereits."
 
     if trader_id != "MANUAL":
-        reason = _blocked_reason(state, args)
+        reason = _blocked_reason(state, args, trader_id)
         if reason:
             return f"⛔ OPEN {coin} geblockt: {reason}"
     elif os.path.exists(STOP_FILE):
@@ -648,7 +657,8 @@ async def run(args: argparse.Namespace) -> None:
     logger.info(
         f"[LIVE] Start {mode} | size=${args.size_usdt:.2f} minWR={args.min_win_rate:.0f}% "
         f"minCopy=${args.min_copy_size_usd:.0f} poll={args.poll_interval:.1f}s "
-        f"maxPos={args.max_positions} maxDailyLoss=${args.max_daily_loss_usd:.2f}"
+        f"maxPos={args.max_positions} maxPos/Trader={args.max_positions_per_trader} "
+        f"maxDailyLoss=${args.max_daily_loss_usd:.2f}"
     )
     balance = ex.get_account_balance(QUOTE_ASSET)
     logger.info(f"[LIVE] Balance: ${balance:.2f} {QUOTE_ASSET}")
@@ -744,6 +754,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--min-copy-size-usd", type=float, default=DEFAULT_MIN_COPY_USD)
     p.add_argument("--usdt-eur-rate",    type=float, default=DEFAULT_USDT_EUR)
     p.add_argument("--max-positions",    type=int,   default=DEFAULT_MAX_POS)
+    p.add_argument("--max-positions-per-trader", type=int, default=DEFAULT_MAX_POS_TRADER)
     p.add_argument("--max-daily-loss-usd", type=float, default=DEFAULT_MAX_DAILY_LOSS)
     p.add_argument("--min-balance-usdt", type=float, default=DEFAULT_MIN_BALANCE)
     p.add_argument("--status-interval",  type=float, default=1800.0,

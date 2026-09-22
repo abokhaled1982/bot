@@ -154,6 +154,7 @@ def bot(tmp_path, monkeypatch, isolated_store, exchange):
         stats_file=str(tmp_path / "stats.json"),
         size_usdt=10.0,
         max_positions=5,
+        max_positions_per_trader=3,
         max_daily_loss_usd=30.0,
         min_balance_usdt=1.0,
         usdt_eur_rate=0.92,
