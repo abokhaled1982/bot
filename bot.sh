@@ -28,7 +28,8 @@ WHATSAPP_TO="${WHATSAPP_TO:-120363429746414084@g.us}"
 # z.B.  SIZE_USDT=1 MIN_BALANCE=1 ./bot.sh start
 SIZE_USDT="${SIZE_USDT:-10}"
 MIN_BALANCE="${MIN_BALANCE:-5}"
-MAX_POSITIONS="${MAX_POSITIONS:-3}"
+MAX_POSITIONS="${MAX_POSITIONS:-10}"
+MAX_POSITIONS_PER_TRADER="${MAX_POSITIONS_PER_TRADER:-3}"
 MAX_DAILY_LOSS="${MAX_DAILY_LOSS:-5}"
 
 BOT_ARGS=(
@@ -36,6 +37,7 @@ BOT_ARGS=(
     --size-usdt "$SIZE_USDT"
     --min-balance-usdt "$MIN_BALANCE"
     --max-positions "$MAX_POSITIONS"
+    --max-positions-per-trader "$MAX_POSITIONS_PER_TRADER"
     --max-daily-loss-usd "$MAX_DAILY_LOSS"
 )
 
