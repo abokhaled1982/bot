@@ -434,12 +434,12 @@ def fetch_leaderboard_rank(
     return _fetch_query_list_pages(time_range=time_range, data_type=statistics_type, limit=limit)
 
 
-def fetch_other_positions(uid: str, trade_type: str = TRADE_TYPE) -> list[dict]:
-    """Oeffentlich sichtbare, aktuell offene Positionen eines Lead-Portfolios."""
+def fetch_other_positions(uid: str, trade_type: str = TRADE_TYPE) -> Optional[list[dict]]:
+    """Oeffentlich sichtbare, offene Positionen. `None` = Abruf fehlgeschlagen."""
     del trade_type
     data = _bn_request(POSITIONS_URL, method="GET", params={"portfolioId": uid})
     if not data:
-        return []
+        return None
     rows = data.get("data") or []
     return rows if isinstance(rows, list) else []
 
@@ -812,7 +812,7 @@ class BinanceLeaderboardTrader:
             open_positions_count = 0
             if min_open_positions > 0 or m.position_shared:
                 rows = fetch_other_positions(candidate.uid)
-                for row in rows:
+                for row in rows or []:
                     parsed = self._parse_position_row(row)
                     if parsed and parsed["size"] > 0:
                         open_symbols.append(parsed["coin"])
@@ -845,7 +845,7 @@ class BinanceLeaderboardTrader:
             return None
         positions = dict(self._positions.get(uid, {}))
         if not positions:
-            rows = fetch_other_positions(uid)
+            rows = fetch_other_positions(uid) or []
             positions = {p["coin"]: p for p in (self._parse_position_row(r) for r in rows) if p}
         return {
             "wallet": uid,
@@ -979,6 +979,12 @@ class BinanceLeaderboardTrader:
     async def _poll_trader(self, uid: str, emit_signals: bool) -> None:
         rows = await asyncio.to_thread(fetch_other_positions, uid)
         tel = self._tel(uid)
+        if rows is None:
+            # Fehlerhafte Antwort nicht als "alle Positionen geschlossen" deuten.
+            tel["poll_error"] = "Abruf fehlgeschlagen"
+            tel["last_poll_at"] = time.time()
+            logger.debug(f"[BN-LB] Poll uebersprungen {self._short(uid)} — keine Antwort")
+            return
         tel["poll_error"] = ""
         tel["last_poll_at"] = time.time()
         tel["poll_count"] += 1

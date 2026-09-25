@@ -10,7 +10,7 @@ Nutzung:
     # Alle Trader mit Winrate >= 80% suchen und in traders_export.json ergaenzen
     # (existierende Wallets werden NICHT ueberschrieben und NICHT dupliziert):
     python3 find_traders.py --min-win-rate 80 --min-day-roi 0 --min-day-pnl 0 \\
-        --pool-size 2000 --limit 500 --append-to traders_export.json
+           --pool-size 2000 --limit 500 --output traders_over_80.json
 
 Keine API-Keys noetig. Nutzt Binances oeffentliches (inoffizielles) Leaderboard.
 """
@@ -37,7 +37,9 @@ from src.adapters.binance_leaderboard import (  # noqa: E402
 _LEADERBOARD_BASE = "https://www.binance.com/en/copy-trading/lead-details"
 
 
-def _candidate_to_export_row(candidate: Any, activate: bool) -> dict[str, Any]:
+def _candidate_to_export_row(
+    candidate: Any, activate: bool, focus: bool = False,
+) -> dict[str, Any]:
     """Kandidat in dieselbe Struktur wie export_traders_json bringen."""
     uid = str(candidate.uid)
     m = candidate.metrics
@@ -46,7 +48,7 @@ def _candidate_to_export_row(candidate: Any, activate: bool) -> dict[str, Any]:
         "wallet":       uid,
         "size_usdt":    None,
         "is_copied":    1 if activate else 0,
-        "is_focus":     0,
+        "is_focus":     1 if focus else 0,
         "note":         "",
         "source":       "scanner",
         "account_usd":  0.0,
@@ -124,6 +126,24 @@ def _append_to_export(path: Path, candidates: list[Any], activate: bool) -> tupl
     return added, skipped
 
 
+def _write_export(path: Path, candidates: list[Any]) -> None:
+    """Neue traders_export-kompatible Liste schreiben."""
+    export = {
+        "exported_at": datetime.now().astimezone().isoformat(),
+        "count": len(candidates),
+        "traders": [
+            _candidate_to_export_row(candidate, activate=True, focus=True)
+            for candidate in candidates
+        ],
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(export, indent=2, ensure_ascii=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=20, help="Max. Anzahl Trader")
@@ -141,10 +161,16 @@ def main() -> None:
                          help="Neue Trader in diese traders_export.json-Datei "
                               "ergaenzen (Duplikate anhand wallet werden "
                               "uebersprungen).")
+    parser.add_argument("--output", metavar="PATH",
+                        help="Neue traders_export-kompatible Liste schreiben "
+                             "(is_copied=1 und is_focus=1).")
     parser.add_argument("--activate", action="store_true",
                          help="Neu ergaenzte Trader mit is_copied=1 speichern "
                               "(nur mit --append-to).")
     args = parser.parse_args()
+
+    if args.append_to and args.output:
+        parser.error("--append-to und --output koennen nicht gemeinsam verwendet werden")
 
     kwargs: dict[str, Any] = {"limit": args.limit, "verified_only": not args.all}
     if args.pool_size is not None:
@@ -156,16 +182,21 @@ def main() -> None:
     if args.min_win_rate is not None:
         kwargs["min_win_rate_pct"] = args.min_win_rate
 
-    print("\n🏆 Binance Futures-Leaderboard — Top Intraday-Trader")
-    print("=" * 70)
-    print("\nLade Daten von binance.com ...")
+    if not args.output:
+        print("\n🏆 Binance Futures-Leaderboard — Top Intraday-Trader")
+        print("=" * 70)
+        print("\nLade Daten von binance.com ...")
 
     candidates = find_intraday_traders(**kwargs)
 
     if not candidates:
-        print("Keine Trader gefunden, die die Filterkriterien erfuellen.")
+        if not args.output:
+            print("Keine Trader gefunden, die die Filterkriterien erfuellen.")
         return
 
+    if args.output:
+        _write_export(Path(args.output), candidates)
+        return
     print(f"\n{'Rang':<6} {'Score':<7} {'Tages-ROI':<11} {'Tages-PnL':<12} "
           f"{'Win-Rate':<10} {'7T-ROI':<9} {'30T-ROI':<9} {'Follower':<9} {'Name'}")
     print(f"{'-'*6} {'-'*7} {'-'*11} {'-'*12} {'-'*10} {'-'*9} "
